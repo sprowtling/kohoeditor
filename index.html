@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Koho Editor</title>
+  <meta name="description" content="A world editor for Minecraft Bedrock Edition that runs in your browser. Browse player inventories, read NBT records and delete chunks so they regenerate.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%235b8c3a'/%3E%3Crect y='10' width='16' height='6' fill='%238a5a33'/%3E%3Crect x='3' y='12' width='2' height='2' fill='%23704626'/%3E%3Crect x='10' y='13' width='2' height='2' fill='%23704626'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="src/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <span class="brand-name">Koho Editor</span>
+    </div>
+    <div class="world-title" id="world-title"></div>
+    <nav class="tabs" id="tabs" hidden>
+      <button data-tab="players" class="active">Players</button>
+      <button data-tab="map">Map</button>
+      <button data-tab="records">Records</button>
+      <button data-tab="world">World</button>
+    </nav>
+    <div class="pending-button" id="pending-button" hidden>
+      <button id="open-pending" class="secondary"><span id="pending-count">0</span>&nbsp;<span id="pending-word">changes</span></button>
+      <button id="save-world" class="primary">Save edited world</button>
+    </div>
+  </header>
+
+  <main id="landing" class="landing">
+    <section class="hero">
+      <h1>Open a Bedrock world</h1>
+      <p class="lede">Look through player inventories, read any record in the world, and delete chunks so they regenerate from the seed.</p>
+      <div class="drop" id="drop">
+        <p class="drop-title">Drop a <b>.mcworld</b> file or a world folder here</p>
+        <div class="drop-buttons">
+          <label class="button primary">Choose .mcworld file
+            <input type="file" id="pick-mcworld" accept=".mcworld,.zip" hidden>
+          </label>
+          <label class="button secondary">Choose world folder
+            <input type="file" id="pick-folder" webkitdirectory multiple hidden>
+          </label>
+        </div>
+      </div>
+      <ul class="notes">
+        <li><b>Your world stays on your computer.</b> Everything happens in this browser tab and nothing is uploaded.</li>
+        <li><b>Your original files are never changed.</b> Saving gives you a new .mcworld file, which you can import into Minecraft or upload to your server or Realm.</li>
+        <li><b>Keep a backup anyway.</b> It's an eight-year-old world. Keep the original download somewhere safe.</li>
+      </ul>
+    </section>
+  </main>
+
+  <main id="loading" class="loading" hidden>
+    <div class="loading-box">
+      <div class="loading-label" id="loading-label">Opening the world</div>
+      <div class="bar"><div class="bar-fill" id="loading-bar"></div></div>
+      <div class="loading-detail" id="loading-detail"></div>
+    </div>
+  </main>
+
+  <main id="app" class="app" hidden>
+    <section class="view" id="view-players"></section>
+    <section class="view" id="view-map" hidden></section>
+    <section class="view" id="view-records" hidden></section>
+    <section class="view" id="view-world" hidden></section>
+  </main>
+
+  <aside class="drawer" id="pending-drawer" hidden>
+    <div class="drawer-head">
+      <h2>Changes waiting to be saved</h2>
+      <button class="icon" id="close-pending" aria-label="Close">×</button>
+    </div>
+    <div id="pending-body"></div>
+  </aside>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>

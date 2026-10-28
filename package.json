@@ -1,0 +1,10 @@
+{
+  "name": "kohoeditor",
+  "private": true,
+  "type": "module",
+  "description": "A world editor for Minecraft Bedrock Edition that runs in the browser.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "start": "python3 -m http.server 8000"
+  }
+}
