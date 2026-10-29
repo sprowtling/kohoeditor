@@ -77,12 +77,14 @@ export function readItem(item, depth = 0) {
   return out;
 }
 
-export function readItems(listTag) {
+// byIndex: the slot is the item's position in the list (armor, offhand)
+// rather than its Slot field.
+export function readItems(listTag, byIndex = false) {
   const list = itemList(listTag);
   if (!list) return [];
   return list.map((i, index) => {
     const it = readItem(i);
-    if (it && it.slot === undefined) it.slot = index;
+    if (it && (byIndex || it.slot === undefined)) it.slot = index;
     return it;
   }).filter(Boolean);
 }
@@ -113,9 +115,9 @@ export function summarizePlayer(root) {
       ? [val(root, 'SpawnX'), val(root, 'SpawnY'), val(root, 'SpawnZ'), val(root, 'SpawnDimension') ?? 0] : null,
     dead: !!val(root, 'Dead'),
     inventory: readItems(child(root, 'Inventory')),
-    armor: readItems(child(root, 'Armor')),
-    offhand: readItems(child(root, 'Offhand')),
-    mainhand: readItems(child(root, 'Mainhand')),
+    armor: readItems(child(root, 'Armor'), true),
+    offhand: readItems(child(root, 'Offhand'), true),
+    mainhand: readItems(child(root, 'Mainhand'), true),
     enderChest: readItems(child(root, 'EnderChestInventory')),
   };
 }

@@ -17,7 +17,8 @@ function arrayText(v) {
   return `[${head}${v.length > 16 ? ', …' : ''}]`;
 }
 
-// opts: { editable, onEdit(ops) -> Promise, open: depth to expand initially }
+// opts: { editable, onEdit(ops) -> Promise, open: depth to expand initially,
+//         expanded: a Map kept by the caller so open/closed parts survive re-rendering }
 export function nbtTree(roots, opts = {}) {
   const ul = h('ul');
   roots.forEach((tag, i) => ul.append(node(tag, [i], 0, opts, roots.length > 1 ? `#${i}` : null)));
@@ -58,8 +59,10 @@ function node(tag, path, depth, opts, labelOverride) {
       };
       more();
     };
+    const pathKey = path.join('.');
     const setOpen = (v) => {
       open = v;
+      opts.expanded?.set(pathKey, v);
       if (open && !built) build();
       childList.hidden = !open;
       tog.textContent = open ? '▾' : '▸';
@@ -69,7 +72,7 @@ function node(tag, path, depth, opts, labelOverride) {
     nameEl.addEventListener('click', () => setOpen(!open));
     line.append(tog, nameEl, h('span', { class: 'summary' }, ' ', kind), del ?? '');
     li.append(childList);
-    setOpen(depth < (opts.open ?? 1) && n <= PAGE);
+    setOpen(opts.expanded?.has(pathKey) ? opts.expanded.get(pathKey) : depth < (opts.open ?? 1) && n <= PAGE);
     return li;
   }
 

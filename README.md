@@ -6,16 +6,26 @@ changes, and save it again.
 
 - **Players**: every player who has joined the world, with their inventory,
   armor, offhand and ender chest. Shulker box contents, enchantments, custom
-  names and signed books are all shown. Search every player at once for an
-  item (try `netherite` or `tnt`), and remove items if you need to.
+  names and signed books are all shown. Click any slot to change its item,
+  count, damage, custom name and enchantments, put a new item in an empty
+  slot, or remove one. Search every player at once for an item (try
+  `netherite` or `tnt`). Give players nicknames and notes, or import the
+  spreadsheet you already keep (see *Player names* below).
 - **Map**: a top-down map of every chunk that exists in the Overworld, Nether
-  and End. Select chunks by dragging or by typing block coordinates, then
-  mark them to **regenerate from the seed**. Click one chunk to see what's
-  inside it, including its chests, signs and mobs.
-- **Records**: every other entry in the world's database (players, villages,
-  maps, scoreboard, portals and more), shown as a readable NBT tree. Click a
-  value to change it.
-- **World**: the seed, spawn point and other facts, plus the full `level.dat`.
+  and End, shaded by how much is built, by **biome** (with gentle hill
+  shading), or by where the chests and mobs are. Player dots show where
+  everyone logged off; click one to open that player. Select chunks by
+  dragging or by typing block coordinates, then:
+  - **regenerate** them from the seed, or
+  - **copy** them and **paste** them somewhere else, in this world or (by
+    saving a `.kohochunks` file) in a different world. Chests, signs and mobs
+    come along, moved to their new positions.
+- **Records**: every other entry in the world's database (villages, maps,
+  scoreboard, portals and more), shown as a readable NBT tree. Click a value
+  to change it.
+- **World**: the seed, spawn point and other facts, plus every world setting
+  and game rule in `level.dat`, all editable. Changing `LevelName` renames
+  the world.
 
 Everything happens on your own computer. The world is never uploaded
 anywhere, and your original files are never changed.
@@ -52,12 +62,41 @@ Everything in the chunk goes: blocks, builds, chests and their contents,
 signs, and the mobs and other entities standing in it. Players are stored
 separately and are not affected.
 
-### About player names
+### Copying and pasting chunks
 
-Bedrock does not save gamertags in the world file, only an id per player, so
-players are listed by id at first. Click a player's name to give them a
-nickname. Nicknames are remembered in your browser only and never go into
-the world.
+Select an area on the map and choose **Copy**. Then choose **Paste…** and
+click where the copy's north-west corner should go, or type block
+coordinates. Pasting replaces whatever was at the destination completely.
+Positions inside the chunks (chests, signs, item frames, mobs) are moved
+along. Each pasted mob gets a fresh id, so it can't clash with anything the
+game creates later.
+
+To move chunks to **another world**, choose **Save as file** after copying.
+That gives you a `.kohochunks` file. Open the other world, choose **Open
+file…** on the map, and paste as usual. The chunks keep their biomes, and
+any world-generation settings they depend on are copied over too.
+
+Every change (each regenerate, each paste, each edited player) appears in the
+*changes* list at the top, and each one can be undone by itself until you
+save.
+
+### Player names
+
+Bedrock does not save gamertags in the world file, only an id per player.
+Click a player's name to give them a nickname, and use the notes box for
+anything else worth remembering.
+
+Names live in your browser, not in the world, so they work for every world
+you open there. They're kept per web address, so keep opening the editor at
+the same address (for example always `http://localhost:8000`). **Names
+list…** on the Players tab can:
+
+- **import a spreadsheet**: save it as CSV (in Excel or Google Sheets: *File →
+  Save As / Download → CSV*). Each row needs a player id and a name; a notes
+  column is picked up too. The id can be the `player_server_…` tag, just the
+  id after it, or the Microsoft account id. Header rows are optional.
+- **download everything as a CSV**, as a backup or to move to another
+  computer.
 
 ## How saving works
 
@@ -118,6 +157,7 @@ src/lib/keys.js       what each database key means
 src/lib/world.js      the world model: scan, players, chunks, edits
 src/lib/zip.js        .mcworld (zip) reading and writing
 src/lib/items.js      readable item names, enchantments, containers
+src/lib/biomes.js     biome names and colours, surface biome sampling
 vendor/fflate.js      zlib decompression (MIT licence)
 tests/                unit tests, fixture world, Mojang LevelDB cross-checks
 ```

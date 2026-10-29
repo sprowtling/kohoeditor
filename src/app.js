@@ -1,6 +1,6 @@
 // The page shell: opening a world, switching views, and saving changes.
 
-import { h, clear, toast, confirmBox, formatBytes, fmt, DIM_NAMES } from './ui.js';
+import { h, clear, toast, confirmBox, formatBytes, fmt, DIM_NAMES, nickname } from './ui.js';
 import { PlayersView } from './views/players.js';
 import { MapView } from './views/map.js';
 import { RecordsView } from './views/records.js';
@@ -53,7 +53,7 @@ const app = {
   async refreshPending() {
     const p = await call('pending');
     app.pendingState = p;
-    const count = p.chunks.reduce((a, b) => a + b, 0) + p.other.length;
+    const count = p.count;
     $('pending-count').textContent = fmt(count);
     $('pending-word').textContent = count === 1 ? 'change' : 'changes';
     $('save-world').disabled = p.total === 0;
@@ -72,6 +72,7 @@ const app = {
   },
   showRecord(key) { app.show('records', { key }); },
   showChunk(dim, x, z) { app.show('map', { dim, x, z }); },
+  showPlayer(key) { app.show('players', { key }); },
 };
 
 // ---------------------------------------------------------------------------
@@ -214,30 +215,44 @@ function renderPending() {
     clear(body, h('p', { class: 'muted' }, 'Nothing has been changed yet.'));
     return;
   }
+  const go = (fn) => () => { $('pending-drawer').hidden = true; fn(); };
+  const undo = (o) => async () => {
+    await call('undoOperation', { id: o.id });
+    await app.reloadPlayers();
+    await app.refreshPending();
+    toast('Undone.');
+  };
+  const view = (o) => {
+    if (o.type === 'delete') return h('button', { class: 'small', onclick: go(() => app.show('map', { dim: o.dim })) }, 'Map');
+    if (o.type === 'paste') return h('button', { class: 'small', onclick: go(() => app.showChunk(o.dim, o.at[0], o.at[1])) }, 'Map');
+    if (o.type === 'leveldat') return h('button', { class: 'small', onclick: go(() => app.show('world')) }, 'View');
+    return h('button', { class: 'small', onclick: go(() => app.showRecord(o.key)) }, 'View');
+  };
+  // Player records read better under the names you've given them.
+  const label = (o) => {
+    const player = o.type === 'record' && app.players.find((x) => x.key === o.key);
+    return player ? o.label.replace(/:.*$/, `: ${nickname(player)}`) : o.label;
+  };
   clear(body,
-    p.chunks.some((n) => n) ? h('div', { class: 'card' },
-      h('h3', {}, 'Chunks to regenerate'),
-      p.chunks.map((n, d) => (n ? h('div', { class: 'change' },
-        h('span', { class: 'what' }, `${fmt(n)} chunk${n === 1 ? '' : 's'} in the ${DIM_NAMES[d]}`),
-        h('button', { class: 'small', onclick: () => { $('pending-drawer').hidden = true; app.show('map', { dim: d }); } }, 'Show on map')) : null))) : null,
-    p.other.length ? h('div', { class: 'card' },
-      h('h3', {}, 'Edited records'),
-      p.other.map((o) => h('div', { class: 'change' },
-        h('span', { class: 'what', title: o.label }, `${o.action === 'deleted' ? 'Deleted' : 'Changed'}: ${o.label}`),
-        h('button', { class: 'small', onclick: () => { $('pending-drawer').hidden = true; app.showRecord(o.key); } }, 'View'),
-        h('button', { class: 'small', onclick: async () => { await call('revertRecord', { key: o.key }); await app.reloadPlayers(); app.refreshPending(); } }, 'Undo')))) : null,
-    h('p', { class: 'muted small-text' }, `${fmt(p.total)} database entries will be changed in total.`));
+    h('div', { class: 'card' },
+      p.operations.map((o) => h('div', { class: 'change' },
+        h('span', { class: 'what', title: o.label }, label(o)),
+        view(o),
+        h('button', { class: 'small', onclick: undo(o) }, 'Undo')))),
+    h('p', { class: 'muted small-text' }, `${fmt(p.total)} database entr${p.total === 1 ? 'y' : 'ies'} will be written in total. Undo works on each change by itself, newest or oldest.`));
 }
 
 $('save-world').addEventListener('click', async () => {
   const p = app.pendingState;
   if (!p || p.total === 0) { toast('There are no changes to save yet.'); return; }
   const chunkCount = p.chunks.reduce((a, b) => a + b, 0);
+  const pastedCount = p.pasted.reduce((a, b) => a + b, 0);
   const ok = await confirmBox({
     title: 'Save the edited world',
     body: [
       'This builds a new .mcworld file with your changes in it. Your original files stay exactly as they are.',
       chunkCount ? `${fmt(chunkCount)} chunk${chunkCount === 1 ? '' : 's'} will regenerate from the seed the next time someone goes near them.` : null,
+      pastedCount ? `${fmt(pastedCount)} pasted chunk${pastedCount === 1 ? '' : 's'} will be written in.` : null,
       'Open the new file in Minecraft once before uploading it, to check everything looks right.',
     ].filter(Boolean),
     ok: 'Build .mcworld',
@@ -269,5 +284,8 @@ $('save-world').addEventListener('click', async () => {
 window.addEventListener('beforeunload', (e) => {
   if (app.pendingState?.total) { e.preventDefault(); e.returnValue = ''; }
 });
+
+// Handy for poking at things from the browser console (and for the browser tests).
+window.__kohoApp = app;
 
 export { app };

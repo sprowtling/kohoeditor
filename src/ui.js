@@ -71,7 +71,7 @@ export function coords(pos) {
   return pos.map((v) => Math.floor(v)).join(', ');
 }
 
-// Per-viewer notes (player nicknames) kept in this browser only.
+// Small per-viewer settings kept in this browser only.
 export const notes = {
   get(key) {
     try { return JSON.parse(localStorage.getItem('koho:' + key) ?? 'null'); } catch { return null; }
@@ -80,6 +80,126 @@ export const notes = {
     try {
       if (value == null || value === '') localStorage.removeItem('koho:' + key);
       else localStorage.setItem('koho:' + key, JSON.stringify(value));
-    } catch { /* storage may be unavailable; nicknames just won't persist */ }
+    } catch { /* storage may be unavailable; this just won't be remembered */ }
   },
 };
+
+// ---------------------------------------------------------------------------
+// Player names: who each player id belongs to, remembered in this browser and
+// shared across every world opened here. Can be imported from and exported to
+// a spreadsheet (CSV), so the list is never only in one place.
+
+const normalizeId = (s) => String(s ?? '').trim().toLowerCase().replace(/^player_server_/, '').replace(/^player_/, '');
+
+function loadNames() {
+  const store = notes.get('names') ?? {};
+  // Nicknames saved by the first version were kept one per key.
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith('koho:nick:')) {
+        const id = normalizeId(k.slice('koho:nick:'.length));
+        const name = JSON.parse(localStorage.getItem(k));
+        if (name && !store[id]) store[id] = { name };
+      }
+    }
+  } catch { /* nothing to bring over */ }
+  return store;
+}
+
+let namesCache = null;
+export const names = {
+  all() { return (namesCache ??= loadNames()); },
+  save() { notes.set('names', namesCache); },
+  // The ids a player can be known by: their server id, Microsoft account id and self-signed id.
+  idsOf(p) {
+    const ids = [normalizeId(p.id)];
+    if (p.link?.msaId) ids.push(normalizeId(p.link.msaId));
+    if (p.link?.selfSignedId) ids.push(normalizeId(p.link.selfSignedId));
+    return ids.filter(Boolean);
+  },
+  lookup(p) {
+    const all = names.all();
+    for (const id of names.idsOf(p)) if (all[id]) return all[id];
+    return null;
+  },
+  set(p, fields) {
+    const all = names.all();
+    const id = names.idsOf(p).find((i) => all[i]) ?? normalizeId(p.id);
+    const entry = { ...(all[id] ?? {}), ...fields };
+    for (const k of Object.keys(entry)) if (entry[k] == null || entry[k] === '') delete entry[k];
+    if (p.link?.msaId) entry.msa = p.link.msaId;
+    if (Object.keys(entry).filter((k) => k !== 'msa').length) all[id] = entry; else delete all[id];
+    names.save();
+  },
+  // rows: arrays of cells from a CSV. Returns { added, updated, skipped }.
+  importRows(rows) {
+    const all = names.all();
+    let idCol = -1, nameCol = -1, notesCol = -1, start = 0;
+    const head = (rows[0] ?? []).map((c) => c.toLowerCase());
+    const find = (re) => head.findIndex((c) => re.test(c));
+    if (head.some((c) => /name|nick|gamertag|who/.test(c)) && head.some((c) => /id|uuid|tag|xuid|msa|key/.test(c))) {
+      nameCol = find(/nick|gamertag|name|who/);
+      idCol = head.findIndex((c, i) => i !== nameCol && /id|uuid|tag|xuid|msa|key/.test(c));
+      notesCol = find(/note|comment|reason|info/);
+      start = 1;
+    }
+    const looksLikeId = (c) => /^(player_server_|player_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c.trim()) || /^player_/i.test(c.trim()) || /^\d{10,20}$/.test(c.trim());
+    let added = 0, updated = 0, skipped = 0;
+    for (const row of rows.slice(start)) {
+      const cells = row.map((c) => c.trim());
+      let ic = idCol, nc = nameCol;
+      if (ic < 0) ic = cells.findIndex(looksLikeId);
+      if (nc < 0) nc = cells.findIndex((c, i) => i !== ic && c && !looksLikeId(c));
+      const id = normalizeId(cells[ic]);
+      const name = cells[nc];
+      if (!id || !name) { skipped++; continue; }
+      const note = notesCol >= 0 ? cells[notesCol] : idCol < 0 ? cells.filter((c, i) => i !== ic && i !== nc && c).join(' · ') : '';
+      const entry = { ...(all[id] ?? {}), name };
+      if (note) entry.notes = note;
+      if (all[id]) updated++; else added++;
+      all[id] = entry;
+    }
+    names.save();
+    return { added, updated, skipped };
+  },
+  toCsv() {
+    const esc = (s) => (/[",\n]/.test(s) ? `"${String(s).replace(/"/g, '""')}"` : String(s ?? ''));
+    const lines = ['id,nickname,notes,microsoft account id'];
+    for (const [id, e] of Object.entries(names.all())) lines.push([id, e.name ?? '', e.notes ?? '', e.msa ?? ''].map(esc).join(','));
+    return lines.join('\n') + '\n';
+  },
+};
+
+export function nickname(p) {
+  const n = names.lookup(p)?.name;
+  if (n) return n;
+  if (p.id === 'local') return 'Local player';
+  return `Player ${p.id.slice(0, 8)}`;
+}
+
+// A forgiving CSV reader: quoted cells, commas or semicolons or tabs.
+export function parseCsv(text) {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? '';
+  const sep = [',', ';', '\t'].map((s) => [s, firstLine.split(s).length]).sort((a, b) => b[1] - a[1])[0][0];
+  const rows = [];
+  let row = [], cell = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else cell += c;
+    } else if (c === '"' && cell === '') quoted = true;
+    else if (c === sep) { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); cell = '';
+      if (row.some((x) => x.trim())) rows.push(row);
+      row = [];
+    } else cell += c;
+  }
+  row.push(cell);
+  if (row.some((x) => x.trim())) rows.push(row);
+  return rows;
+}

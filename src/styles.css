@@ -218,7 +218,19 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .slot.container::after { content: ""; position: absolute; left: 3px; top: 3px; width: 6px; height: 6px; border-radius: 2px; background: var(--warn); }
 .slot .swatch { position: absolute; left: 0; right: 0; top: 0; height: 4px; }
 .slot-empty-label { color: var(--muted); font-size: 9px; opacity: 0.7; }
-.item-detail { margin-top: 14px; }
+.item-detail, .item-panel { margin-top: 14px; }
+.item-panel .ench, .contents .ench { color: var(--enchant); }
+.item-form { display: grid; gap: 10px; margin-top: 12px; max-width: 520px; }
+.field { display: grid; gap: 4px; }
+.field .k, .contents .k { color: var(--muted); font-size: 12px; font-weight: 600; }
+.ench-rows { display: grid; gap: 6px; }
+.field > button { justify-self: start; }
+.ench-row select { flex: 1; }
+.contents { margin-top: 10px; padding: 8px 10px; background: var(--panel-2); border-radius: 6px; }
+.contents ul { margin: 4px 0; padding-left: 18px; }
+.slot.empty-slot { cursor: pointer; }
+.slot.empty-slot:hover { border-color: var(--muted); }
+.player-notes { width: 100%; margin-top: 8px; resize: vertical; font-size: 13px; }
 .item-detail .name { font-weight: 700; font-size: 15px; }
 .item-detail .ench { color: var(--enchant); }
 .item-detail ul { margin: 6px 0; padding-left: 18px; }
@@ -244,6 +256,12 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font-size: 12.5px;
   font-family: var(--mono);
 }
+.map-banner {
+  position: absolute; left: 50%; top: 60px; transform: translateX(-50%);
+  background: #f0a020; color: #2b1c00; border-radius: 8px; padding: 8px 12px; font-weight: 600;
+  display: flex; gap: 12px; align-items: center; box-shadow: 0 4px 14px rgba(0,0,0,0.2); max-width: calc(100% - 24px);
+}
+.check { display: flex; gap: 6px; align-items: center; margin-top: 8px; cursor: pointer; }
 .map-legend { position: absolute; right: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 12px; display: grid; gap: 3px; }
 .legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 6px; }
 .map-side { width: 340px; flex-shrink: 0; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 14px; }

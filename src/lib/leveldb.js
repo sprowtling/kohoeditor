@@ -329,13 +329,13 @@ class ConcatIter {
   next() {
     for (;;) {
       if (this.cur && (this.cur.valid ? this.cur.next() : false)) {
-        this.key = this.cur.key; this.value = this.cur.value; this.valid = true;
+        this.key = this.cur.key; this.value = this.cur.value; this.extra = this.cur.extra; this.valid = true;
         return true;
       }
       this.i++;
       if (this.i >= this.openers.length) { this.valid = false; this.cur = null; return false; }
       this.cur = this.openers[this.i]().iterator();
-      if (this.cur.valid) { this.key = this.cur.key; this.value = this.cur.value; this.valid = true; return true; }
+      if (this.cur.valid) { this.key = this.cur.key; this.value = this.cur.value; this.extra = this.cur.extra; this.valid = true; return true; }
     }
   }
 }
@@ -391,13 +391,19 @@ class MergeIter {
 }
 
 // A compact list of one table's keys and value lengths, in table order.
-export function summarizeTable(table) {
+// extract(userKey, value) may return a few bytes worth keeping about a value
+// (a biome sample, say); they ride along in the summary.
+export function summarizeTable(table, extract = null) {
   const w = new Writer(1 << 20);
   const it = table.iterator();
   while (it.valid) {
-    w.varint(it.key.length);
-    w.bytes(it.key);
+    const k = it.key;
+    w.varint(k.length);
+    w.bytes(k);
     w.varint(it.value.length);
+    const extra = extract && k[k.length - 8] === TYPE_VALUE ? extract(k.subarray(0, k.length - 8), it.value) : null;
+    w.varint(extra ? extra.length : 0);
+    if (extra) w.bytes(extra);
     it.next();
   }
   return w.result();
@@ -414,6 +420,8 @@ class SummaryIter {
     if (this.r.pos >= this.buf.length) { this.valid = false; return false; }
     this.key = this.r.lenPrefixed();
     this.value = this.r.varint();
+    const n = this.r.varint();
+    this.extra = n ? this.r.bytes(n) : null;
     this.valid = true;
     return true;
   }
@@ -577,10 +585,11 @@ export class LevelDB {
     }
   }
 
-  // Like forEach, but only reports each live key and the length of its value.
-  // summaries (optional) maps a table number to summarizeTable() output made
-  // elsewhere, so the slow part (decompressing tables) can run in parallel.
-  forEachKey(fn, summaries = null) {
+  // Like forEach, but reports each live key with the length of its value and
+  // extract(key, value) of it. summaries (optional) maps a table number to
+  // summarizeTable() output made elsewhere with the same extract, so the slow
+  // part (decompressing tables) can run in parallel.
+  forEachKey(fn, summaries = null, extract = null) {
     const children = [new ArrayIter(this.mem)];
     this.files.forEach((list, level) => {
       if (!list || !list.length) return;
@@ -602,7 +611,11 @@ export class LevelDB {
       }
       if (!same) {
         last = k.subarray(0, ulen);
-        if (k[ulen] === TYPE_VALUE) fn(last, typeof it.value === 'number' ? it.value : it.value.length);
+        if (k[ulen] === TYPE_VALUE) {
+          const src = it.heap[0];
+          if (typeof src.value === 'number') fn(last, src.value, src.extra);
+          else fn(last, src.value.length, extract ? extract(last, src.value) : null);
+        }
       }
       it.next();
     }

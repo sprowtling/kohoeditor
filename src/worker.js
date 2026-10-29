@@ -124,6 +124,14 @@ const methods = {
   otherKeys: () => world.otherKeys,
   record: ({ key }) => world.record(key),
   chunkList: ({ dim }) => world.chunkList(dim),
+  copyChunks: ({ dim, coords }) => world.copyChunks(dim, coords),
+  clipboardInfo: () => world.clipboardInfo(),
+  clipboardFile: () => new Blob([world.clipboardFile()], { type: 'application/octet-stream' }),
+  loadClipboard: ({ file }) => world.loadClipboard(new Uint8Array(new FileReaderSync().readAsArrayBuffer(file))),
+  pasteChunks: ({ dim, x, z, entities }) => world.pasteChunks(dim, x, z, { entities }),
+  undoOperation: ({ id }) => world.undoOperation(id),
+  setItem: ({ key, list, slot, item }) => world.setItem(key, list, slot, item),
+  editLevelDat: ({ ops }) => world.editLevelDat(ops),
   chunkDetail: ({ dim, x, z }) => world.chunkDetail(dim, x, z),
   deleteChunks: ({ dim, coords }) => world.deleteChunks(dim, coords),
   restoreChunks: ({ dim, coords }) => world.restoreChunks(dim, coords),
@@ -131,7 +139,7 @@ const methods = {
   deleteRecord: ({ key }) => world.deleteRecord(key),
   revertRecord: ({ key }) => world.revertRecord(key),
   pending: () => world.pending(),
-  levelDat: () => world.levelDat ? world.levelDat.tag : null,
+  levelDat: () => ({ tag: world.currentLevelDat(), edited: !!world.levelDatEdit }),
 
   // Builds the edited world as a new .mcworld. The original files are not touched.
   exportWorld(_, progress) {
@@ -141,8 +149,11 @@ const methods = {
     for (const p of paths) total += source.open(p)?.size ?? 0;
     let done = 0;
     const tick = (n) => { done += n; progress(Math.min(done / Math.max(total, 1), 1), 'Packing the world'); };
-    const entries = paths.map((p) => source.exportEntry(p, p.slice(world.root.length), tick));
-    entries.push({ name: log.path.slice(world.root.length), method: 0, crc: crc32(log.bytes), compSize: log.bytes.length, size: log.bytes.length, data: log.bytes });
+    const replaced = new Map(world.changedFiles().map((f) => [f.path, f.bytes]));
+    const stored = (name, bytes) => ({ name, method: 0, crc: crc32(bytes), compSize: bytes.length, size: bytes.length, data: bytes });
+    const entries = paths.map((p) => (replaced.has(p) ? stored(p.slice(world.root.length), replaced.get(p)) : source.exportEntry(p, p.slice(world.root.length), tick)));
+    for (const [p, bytes] of replaced) if (!paths.includes(p)) entries.push(stored(p.slice(world.root.length), bytes));
+    if (log.ops) entries.push(stored(log.path.slice(world.root.length), log.bytes));
     const blob = new Blob(buildZip(entries), { type: 'application/octet-stream' });
     return { blob, ops: log.ops, logName: log.path };
   },
@@ -155,7 +166,7 @@ self.onmessage = async (ev) => {
     if (!methods[method]) throw new Error(`Unknown method ${method}`);
     if (method !== 'open' && !world) throw new Error('No world is open.');
     const result = await methods[method](args ?? {}, progress);
-    const transfer = result instanceof Int32Array ? [result.buffer] : [];
+    const transfer = result && result.list instanceof Int32Array ? [result.list.buffer, result.surface.buffer] : [];
     self.postMessage({ id, result }, transfer);
   } catch (e) {
     console.error(e);

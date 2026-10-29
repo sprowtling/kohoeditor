@@ -69,6 +69,13 @@ export class RecordsView {
     this.renderRecord();
   }
 
+  // Remembers which parts of each record's tree are open, so editing doesn't fold everything up.
+  expandedFor(key) {
+    this.expanded ??= new Map();
+    if (!this.expanded.has(key)) this.expanded.set(key, new Map());
+    return this.expanded.get(key);
+  }
+
   onShow(opts = {}) {
     if (opts.key) { this.key = opts.key; this.renderRecord(); this.renderList(); }
   }
@@ -139,7 +146,7 @@ export class RecordsView {
           }, 'Delete record') : null)),
       rec.nbt ? h('div', { class: 'card' },
         h('div', { class: 'muted small-text', style: { marginBottom: '8px' } }, 'Click a value to change it. Hover over an entry to delete it.'),
-        nbtTree(rec.nbt, { editable: true, onEdit, open: 1 }),
+        nbtTree(rec.nbt, { editable: true, onEdit, open: 1, expanded: this.expandedFor(key) }),
         rec.restHex ? [h('h3', { style: { marginTop: '12px' } }, 'Extra bytes after the NBT'), h('div', { class: 'hex' }, hexDump(rec.restHex))] : null) : null,
       rec.actorIds ? h('div', { class: 'card' },
         h('h3', {}, `${rec.actorIds.length} entit${rec.actorIds.length === 1 ? 'y' : 'ies'} in this chunk`),

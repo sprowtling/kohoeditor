@@ -40,11 +40,43 @@ let seed = 12345;
 const rand = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed >>> 16; };
 const blockData = (n) => { const b = new Uint8Array(n); let run = 0, v = 0; for (let i = 0; i < n; i++) { if (!run) { run = 1 + (rand() % 40); v = rand() & 0xff; } b[i] = v; run--; } return b; };
 
+// Data3D: a heightmap (surface at y = 15, stored as height above y = -64), then
+// biome sections. Section 0 is either one biome everywhere, or two biomes split
+// at x = 8 (a 1-bit palette); every section above repeats the one below.
+function data3d(biomeA, biomeB = null) {
+  const w = [];
+  const hm = new Uint8Array(512);
+  const hv = new DataView(hm.buffer);
+  for (let i = 0; i < 256; i++) hv.setInt16(i * 2, 80, true);
+  w.push(hm);
+  if (biomeB === null) {
+    const s = new Uint8Array(5);
+    s[0] = 0 << 1 | 1;
+    new DataView(s.buffer).setInt32(1, biomeA, true);
+    w.push(s);
+  } else {
+    const s = new Uint8Array(1 + 128 * 4 + 4 + 8);
+    const dv = new DataView(s.buffer);
+    s[0] = 1 << 1 | 1;
+    for (let word = 64; word < 128; word++) dv.setUint32(1 + word * 4, 0xffffffff, true); // x >= 8
+    dv.setInt32(1 + 512, 2, true);
+    dv.setInt32(1 + 516, biomeA, true);
+    dv.setInt32(1 + 520, biomeB, true);
+    w.push(s);
+  }
+  for (let i = 1; i < 24; i++) w.push(Uint8Array.of(0xff));
+  const out = new Uint8Array(w.reduce((n, a) => n + a.length, 0));
+  let o = 0;
+  for (const a of w) { out.set(a, o); o += a.length; }
+  return out;
+}
+
 let actorId = 1;
 for (const [dim, size] of [[0, 6], [1, 3], [2, 2]]) {
   for (let x = -size; x < size; x++) for (let z = -size; z < size; z++) {
     put(chunkKey(x, z, dim, 0x2c), Uint8Array.of(40));
-    put(chunkKey(x, z, dim, 0x2b), blockData(300));
+    const biome = dim === 1 ? 8 : dim === 2 ? 9 : x < 0 ? 1 : 4;
+    put(chunkKey(x, z, dim, 0x2b), x === 2 && z === 2 && dim === 0 ? data3d(4, 7) : data3d(biome));
     for (let sub = -4; sub < (dim === 0 ? 4 : 2); sub++) put(chunkKey(x, z, dim, 0x2f, sub), Uint8Array.of(9, 1, sub & 0xff, ...blockData(100 + (rand() % 200))));
     put(chunkKey(x, z, dim, 0x36), Uint8Array.of(2, 0, 0, 0));
     if ((x + z) % 3 === 0) {
@@ -53,17 +85,35 @@ for (const [dim, size] of [[0, 6], [1, 3], [2, 2]]) {
     }
     const ids = [];
     if ((x * 7 + z) % 4 === 0) {
+      let first = null;
       for (let k = 0; k < 2; k++) {
+        const n = actorId++;
         const id = new Uint8Array(8);
-        new DataView(id.buffer).setUint32(4, actorId++, false);
+        new DataView(id.buffer).setUint32(4, n, false);
         ids.push(id);
-        put(actorKey(id), serialize(C('', [S('identifier', k ? 'minecraft:cow' : 'minecraft:zombie'), L('Pos', T.Float, [F(x * 16 + 8), F(70), F(z * 16 + 8)])])));
+        // Like the game: the UniqueID and the storage key inside match the database key.
+        put(actorKey(id), serialize(C('', [
+          S('identifier', k ? 'minecraft:cow' : 'minecraft:zombie'), L('Pos', T.Float, [F(x * 16 + 8), F(70), F(z * 16 + 8)]),
+          Lg('UniqueID', n), Lg('LeasherID', k ? first : -1),
+          C('internalComponents', [C('EntityStorageKeyComponent', [S('StorageKey', String.fromCharCode(...id))])]),
+        ])));
+        first = n;
       }
     }
     const d = new Uint8Array(ids.length * 8);
     ids.forEach((id, i) => d.set(id, i * 8));
     put(digpKey(x, z, dim), d);
   }
+}
+// An old (pre-1.18) chunk: Data2D holds a heightmap and one biome byte per column.
+{
+  const d2 = new Uint8Array(512 + 256);
+  const dv = new DataView(d2.buffer);
+  for (let i = 0; i < 256; i++) dv.setInt16(i * 2, 70, true);
+  d2.fill(2, 512); // desert
+  put(chunkKey(20, 20, 0, 0x2d), d2);
+  put(chunkKey(20, 20, 0, 0x76), Uint8Array.of(7));
+  put(chunkKey(20, 20, 0, 0x2f, 0), Uint8Array.of(8, 1, ...blockData(150)));
 }
 // A chunk that existed once and was deleted, so the database holds deletion markers.
 put(chunkKey(40, 40, 0, 0x2c), Uint8Array.of(40));

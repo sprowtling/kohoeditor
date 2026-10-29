@@ -115,7 +115,7 @@ test('chunk keys are recognised, and text keys are not mistaken for chunks', () 
 test('the world scan finds chunks, entities and players', () => {
   const w = new World(folderFiles(FIXTURE));
   const stats = w.scan();
-  assert.deepEqual(stats.chunks, [144, 36, 16]);
+  assert.deepEqual(stats.chunks, [145, 36, 16]);
   assert.equal(w.levelName, 'Fixture World');
   const players = w.players();
   assert.equal(players.length, 3);
@@ -163,7 +163,7 @@ test('deleting chunks removes their data and entities, and the game\'s LevelDB f
   assert.deepEqual(readAll(db2), want);
   const w2 = new World(folderFiles(dir));
   const stats = w2.scan();
-  assert.deepEqual(stats.chunks, [141, 36, 16]);
+  assert.deepEqual(stats.chunks, [142, 36, 16]);
   assert.equal(w2.players().find((x) => x.id.startsWith('11111111')).summary.level, 31);
   assert.equal(w2.get(digpKey(0, 0, 0)), null);
   for (const e of withEntities.entities) assert.equal(w2.get(fromHex(e.key)), null, 'entity removed');
@@ -192,7 +192,7 @@ test('a .mcworld can be read in place and rebuilt with a new file added', () => 
   const asFile = { size: zipped.length, read: (o, l) => zipped.subarray(o, o + l) };
   const zip = new ZipFiles(asFile);
   const w = new World({ paths: zip.entries.map((e) => e.name), open: (p) => zip.open(p) });
-  assert.deepEqual(w.scan().chunks, [144, 36, 16]);
+  assert.deepEqual(w.scan().chunks, [145, 36, 16]);
   w.deleteChunks(1, [[0, 0]]);
   const log = w.changeLog();
   // Rebuild, copying entries without recompressing them.
@@ -208,7 +208,7 @@ test('a .mcworld can be read in place and rebuilt with a new file added', () => 
     assert.equal(crc32(f.read(0, f.size)), e.crc, e.name);
   }
   const w2 = new World({ paths: zip2.entries.map((e) => e.name), open: (p) => zip2.open(p) });
-  assert.deepEqual(w2.scan().chunks, [144, 35, 16]);
+  assert.deepEqual(w2.scan().chunks, [145, 35, 16]);
 });
 
 test('checksums match their reference values', () => {
