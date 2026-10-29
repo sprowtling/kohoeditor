@@ -5,6 +5,7 @@
 import { h, clear, toast, confirmBox, fmt, formatBytes, DIM_NAMES, nickname, notes } from '../ui.js';
 import { BIOME_RGB, biomeName } from '../lib/biomes.js';
 import { CELL, RESULT_BYTES } from '../lib/blockmap.js';
+import { SeedLayer } from './seedlayer.js';
 
 const TILE = 128; // chunks per tile edge
 const MIN_SCALE = 0.05, MAX_SCALE = 48;
@@ -64,6 +65,11 @@ export class MapView {
     this.blockFailed = [new Set(), new Set(), new Set()];
     this.prevFlags = [new Map(), new Map(), new Map()];
     this.showPlayers = notes.get('map:players') ?? true;
+    // The seed map underneath: off until asked for; the world drawn on top at worldAlpha.
+    this.seedOn = false;
+    this.worldAlpha = notes.get('map:worldAlpha') ?? 0.55;
+    this.seedY = notes.get('map:seedY') ?? 64;
+    this.seedLayer = null;
     this.modeSelect = h('select', { onchange: (e) => { this.mode = e.target.value; notes.set('map:mode', this.mode); this.buildTiles(); this.draw(); this.loadBlocks(); } },
       h('option', { value: 'blocks' }, 'Blocks from above (like an in-game map)'),
       h('option', { value: 'size' }, 'Shade: amount of data'),
@@ -343,6 +349,11 @@ export class MapView {
   }
 
   renderLegend() {
+    this.renderModeLegend();
+    if (this.seedOn) this.legend.prepend(h('div', { class: 'muted' }, 'Underneath: the seed\'s biomes'));
+  }
+
+  renderModeLegend() {
     const sw = (color, text) => h('div', {}, h('span', { class: 'legend-swatch', style: { background: color } }), text);
     const danger = cssVar('--danger') || '#b33a2b';
     const pasted = sw(`rgb(${PASTED_RGB})`, 'pasted');
@@ -430,12 +441,24 @@ export class MapView {
     ctx.fillRect(0, 0, this.w, this.hgt);
     ctx.imageSmoothingEnabled = false;
     const [x0, z0] = this.toChunk(0, 0), [x1, z1] = this.toChunk(this.w, this.hgt);
+    if (this.seedOn && this.app.info.seed) {
+      this.seedLayer ??= new SeedLayer(() => this.draw());
+      this.seedLayer.configure(this.app.info.seed, this.dim, this.seedY);
+      this.seedLayer.draw(ctx, {
+        blockRect: [x0 * 16, z0 * 16, x1 * 16, z1 * 16],
+        toScreen: (bx, bz) => this.toScreen(bx / 16, bz / 16),
+        pxPerBlock: scale / 16,
+        center: [this.view.cx * 16, this.view.cz * 16],
+      });
+      ctx.globalAlpha = this.worldAlpha;
+    }
     for (const t of this.tiles.values()) {
       const bx = t.tx * TILE, bz = t.tz * TILE;
       if (bx > x1 || bx + TILE < x0 || bz > z1 || bz + TILE < z0) continue;
       const [sx, sy] = this.toScreen(bx, bz);
       ctx.drawImage(t.canvas, sx, sy, TILE * scale, TILE * scale);
     }
+    ctx.globalAlpha = 1;
     this.drawGrid(ctx, x0, z0, x1, z1);
     // Players
     ctx.font = '600 11px system-ui, sans-serif';
@@ -587,14 +610,16 @@ export class MapView {
     const x = Math.floor(fx), z = Math.floor(fz);
     const i = this.index?.get(x + ',' + z);
     let text = `Chunk ${x}, ${z} · blocks ${x * 16}…${x * 16 + 15}, ${z * 16}…${z * 16 + 15}`;
-    if (i === undefined) return text + ' · not generated';
+    const seedBiome = this.seedOn ? this.seedLayer?.biomeAt(Math.floor(fx * 16), Math.floor(fz * 16)) : null;
+    const seedText = seedBiome != null ? ` · seed makes ${biomeName(seedBiome)}` : '';
+    if (i === undefined) return text + ' · not generated' + seedText;
     const flags = this.chunks[i + 3];
     const s = this.sampleAt(x, z, Math.min(3, Math.floor((fx - x) * 4)), Math.min(3, Math.floor((fz - z) * 4)));
     if (s) text += ` · ${biomeName(s.biome)}, surface y ${s.height - 64}`;
     text += ` · ${formatBytes(this.chunks[i + 2])}`;
     if (flags & FLAG_DELETED) text += ' · will regenerate';
     if (flags & FLAG_PASTED) text += ' · pasted';
-    return text;
+    return text + seedText;
   }
 
   bindEvents() {
@@ -836,13 +861,30 @@ export class MapView {
     const clipCard = this.clipCard();
     const seed = this.app.info.seed;
     const [bx, bz] = [Math.round(this.view.cx * 16), Math.round(this.view.cz * 16)];
+    const alpha = h('input', {
+      type: 'range', min: 0, max: 100, value: Math.round(this.worldAlpha * 100), disabled: !this.seedOn,
+      oninput: (e) => { this.worldAlpha = e.target.value / 100; notes.set('map:worldAlpha', this.worldAlpha); this.draw(); },
+    });
+    const yInput = h('input', {
+      type: 'number', value: this.seedY, step: 8, min: -64, max: 320, style: { width: '80px' }, disabled: !this.seedOn,
+      onchange: (e) => { const v = Math.max(-64, Math.min(320, Math.round(Number(e.target.value) || 64))); this.seedY = v; notes.set('map:seedY', v); this.draw(); },
+    });
     const seedCard = seed ? h('div', { class: 'card' },
       h('h3', {}, 'World seed'),
       h('div', { class: 'mono small-text', style: { wordBreak: 'break-all' } }, seed),
+      h('label', { class: 'check small-text' },
+        h('input', { type: 'checkbox', checked: this.seedOn, onchange: (e) => { this.seedOn = e.target.checked; this.renderSide(); this.renderLegend(); this.draw(); } }),
+        ' Show the seed\'s biomes underneath the map'),
+      this.seedOn ? [
+        h('label', { class: 'field small-text', style: { marginTop: '8px' } }, h('span', { class: 'k' }, `Your world on top: ${Math.round(this.worldAlpha * 100)}%`), alpha),
+        h('div', { class: 'row small-text', style: { marginTop: '6px' } }, 'Biomes at height y', yInput),
+        h('p', { class: 'muted small-text', style: { marginBottom: 0 } },
+          'This is what the seed generates today (as of Minecraft 1.21), which is what new or regenerated chunks will get. Slide your world down to see it on its own; hover anywhere to compare. It matches Bedrock\'s own biomes closely, though edges such as riverbanks can be a few blocks off. Biomes vary with height: 64 is around sea level.'),
+      ] : null,
       h('div', { class: 'row', style: { marginTop: '8px' } },
         h('button', { class: 'small', onclick: () => { navigator.clipboard?.writeText(seed).then(() => toast('Seed copied.'), () => toast(seed)); } }, 'Copy seed'),
         h('button', { class: 'small', title: 'Opens Chunkbase\'s seed map in a new tab, centred where you are looking', onclick: () => this.openChunkbase() }, 'Open this spot in Chunkbase')),
-      h('p', { class: 'muted small-text', style: { marginBottom: 0 } }, 'Chunkbase shows what the seed generates, which is what regenerated chunks will look like. The seed is copied too, in case you need to paste it there.')) : null;
+      h('p', { class: 'muted small-text', style: { marginBottom: 0 } }, 'Opening Chunkbase copies the seed too, in case you need to paste it there.')) : null;
     const help = h('div', { class: 'card muted small-text' },
       h('p', { style: { marginTop: 0 } }, 'Drag to move, scroll to zoom. To select, use the Select tool or hold Shift while dragging. Click one chunk to look inside it, or a player\'s dot to open their inventory.'),
       h('p', { style: { marginBottom: 0 } }, 'Regenerated chunks come back fresh from the world seed the next time a player comes near. Builds, chests, signs and mobs in them are removed.'));

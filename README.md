@@ -22,8 +22,16 @@ changes, and save it again.
   A grid labelled with block coordinates scales with the zoom, and **Go to**
   takes you to any coordinates (paste `x y z` straight from the game).
   Player dots show where everyone logged off (click one to open that player,
-  or hide them all with the **Players** switch). **Open this spot in
-  Chunkbase** shows what the world seed generates at the same place. Select
+  or hide them all with the **Players** switch).
+
+  **The seed map**: switch on *Show the seed's biomes underneath the map*
+  (in the *World seed* card) to see the biomes your world's seed generates
+  today, which is what new or regenerated chunks get, underneath your world.
+  Slide *Your world on top* to fade your world in and out, and hover to
+  compare the two at any spot. It's built in (it works offline) using
+  [cubiomes](https://github.com/Cubitect/cubiomes); it matches Bedrock's own
+  biomes closely, though edges such as riverbanks can be a few blocks off.
+  **Open this spot in Chunkbase** shows the same place there. Select
   chunks by dragging or by typing block coordinates, then:
   - **regenerate** them from the seed, or
   - **copy** them and **paste** them somewhere else, in this world or (by
@@ -177,5 +185,8 @@ src/lib/biomes.js     biome names and colours, surface biome sampling
 src/lib/blockmap.js   the block view: reading subchunks, colours, top blocks
 src/mapworker.js      helper workers that draw the block view in parallel
 vendor/fflate.js      zlib decompression (MIT licence)
+vendor/seedgen.wasm   cubiomes' biome generator, built by tools/seedgen/build.sh (MIT licence)
+src/lib/seedgen.js    loads it and turns its biome ids into Bedrock's
+src/views/seedlayer.js, src/seedworker.js   the seed map layer and its helpers
 tests/                unit tests, fixture world, Mojang LevelDB cross-checks
 ```
