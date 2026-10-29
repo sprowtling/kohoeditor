@@ -2,8 +2,9 @@
 // regenerate them from the seed, or copy them and paste them somewhere else
 // (in this world, or another one via a chunk file).
 
-import { h, clear, toast, confirmBox, fmt, formatBytes, DIM_NAMES, nickname } from '../ui.js';
+import { h, clear, toast, confirmBox, fmt, formatBytes, DIM_NAMES, nickname, notes } from '../ui.js';
 import { BIOME_RGB, biomeName } from '../lib/biomes.js';
+import { CELL, RESULT_BYTES } from '../lib/blockmap.js';
 
 const TILE = 128; // chunks per tile edge
 const MIN_SCALE = 0.05, MAX_SCALE = 48;
@@ -28,6 +29,10 @@ function rampColor(t) {
 }
 
 const PASTED_RGB = [90, 150, 230];
+const BLOCK_BATCH = 1024; // chunks drawn per request in the block view
+
+// Round numbers of blocks between labelled grid lines, smallest first.
+const GRID_STEPS = [16, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000];
 const PLAIN_RGB = [200, 205, 190];
 const NO_BIOME_RGB = [150, 146, 160]; // chunks without biome data, distinct from every biome colour
 
@@ -48,11 +53,19 @@ export class MapView {
     this.legend = h('div', { class: 'map-legend' });
     this.side = h('div', { class: 'map-side' });
     this.banner = h('div', { class: 'map-banner', hidden: true });
+    this.loading = h('div', { class: 'map-loading', hidden: true });
+    this.mode = notes.get('map:mode') ?? 'size';
+    this.gotoMark = null;
     this.dimSeg = h('div', { class: 'seg' }, DIM_NAMES.map((n, d) => h('button', { onclick: () => this.setDim(d) }, n)));
     this.toolSeg = h('div', { class: 'seg' },
       h('button', { dataset: { tool: 'pan' }, onclick: () => this.setTool('pan'), title: 'Drag to move around (hold Shift to select instead)' }, 'Move'),
       h('button', { dataset: { tool: 'select' }, onclick: () => this.setTool('select'), title: 'Drag to select chunks' }, 'Select'));
-    this.modeSelect = h('select', { onchange: (e) => { this.mode = e.target.value; this.buildTiles(); this.draw(); } },
+    this.blockCache = [new Map(), new Map(), new Map()]; // "x,z" -> RESULT_BYTES, per dimension
+    this.blockFailed = [new Set(), new Set(), new Set()];
+    this.prevFlags = [new Map(), new Map(), new Map()];
+    this.showPlayers = notes.get('map:players') ?? true;
+    this.modeSelect = h('select', { onchange: (e) => { this.mode = e.target.value; notes.set('map:mode', this.mode); this.buildTiles(); this.draw(); this.loadBlocks(); } },
+      h('option', { value: 'blocks' }, 'Blocks from above (like an in-game map)'),
       h('option', { value: 'size' }, 'Shade: amount of data'),
       h('option', { value: 'biome' }, 'Biomes'),
       h('option', { value: 'blockEntities' }, 'Highlight: chests, signs & other block entities'),
@@ -60,14 +73,18 @@ export class MapView {
     clear(el,
       h('div', { class: 'map-wrap' },
         this.canvas,
-        h('div', { class: 'map-toolbar' }, this.dimSeg, this.toolSeg, this.modeSelect,
+        this.toolbar = h('div', { class: 'map-toolbar' }, this.dimSeg, this.toolSeg, this.modeSelect,
           h('button', { onclick: () => this.fit() }, 'Fit world'),
-          h('button', { onclick: () => this.centerOn(0, 0) }, 'Go to 0, 0')),
-        this.banner, this.status, this.legend),
+          this.gotoForm(),
+          h('label', { class: 'button toggle', title: 'Show or hide where players logged off' },
+            h('input', { type: 'checkbox', checked: this.showPlayers, onchange: (e) => { this.showPlayers = e.target.checked; notes.set('map:players', this.showPlayers); this.hoverPlayer = null; this.draw(); } }),
+            ' Players')),
+        this.banner, this.loading, this.status, this.legend),
       this.side);
     this.bindEvents();
     new ResizeObserver(() => this.resize()).observe(this.canvas.parentElement);
     this.setTool('pan');
+    this.modeSelect.value = this.mode;
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this.pasting) this.stopPasting(); });
     this.loaded = this.setDim(0, true).then(() => this.app.call('clipboardInfo')).then((c) => { this.clip = c; this.renderSide(); });
   }
@@ -103,10 +120,19 @@ export class MapView {
     this.chunks = list;
     this.surface = surface;
     this.index = new Map();
-    for (let i = 0; i < list.length; i += 4) this.index.set(list[i] + ',' + list[i + 1], i);
+    // A chunk whose flags changed (pasted, say) must be drawn again in the block view.
+    const prev = this.prevFlags[this.dim], next = new Map();
+    for (let i = 0; i < list.length; i += 4) {
+      const id = list[i] + ',' + list[i + 1];
+      this.index.set(id, i);
+      next.set(id, list[i + 3]);
+      if (prev.size && prev.get(id) !== list[i + 3]) { this.blockCache[this.dim].delete(id); this.blockFailed[this.dim].delete(id); }
+    }
+    this.prevFlags[this.dim] = next;
     this.buildTiles();
     this.draw();
     this.renderSide();
+    this.loadBlocks();
   }
 
   setTool(tool) {
@@ -130,6 +156,7 @@ export class MapView {
   }
 
   buildTiles() {
+    if (this.mode === 'blocks') { this.buildBlockTiles(); return; }
     this.tiles = new Map();
     const c = this.chunks;
     const danger = hexToRgb(cssVar('--danger') || '#b33a2b');
@@ -195,11 +222,135 @@ export class MapView {
     this.renderLegend();
   }
 
+  // ---- Block view: what the world looks like from above, drawn as it's read.
+
+  buildBlockTiles() {
+    this.tiles = new Map();
+    const size = TILE * CELL;
+    for (let i = 0; i < this.chunks.length; i += 4) {
+      const x = this.chunks[i], z = this.chunks[i + 1];
+      const tx = Math.floor(x / TILE), tz = Math.floor(z / TILE);
+      const key = tx + ',' + tz;
+      if (!this.tiles.has(key)) {
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        this.tiles.set(key, { tx, tz, canvas, ctx: canvas.getContext('2d'), img: new ImageData(size, size), dirty: true });
+      }
+      this.paintBlockChunk(x, z, i);
+    }
+    this.flushTiles();
+    this.renderLegend();
+  }
+
+  tileFor(x, z) {
+    return this.tiles.get(Math.floor(x / TILE) + ',' + Math.floor(z / TILE));
+  }
+
+  // Shading like an in-game map: brighter where the ground is higher than
+  // just north of it, darker where lower.
+  paintBlockChunk(x, z, i = this.index.get(x + ',' + z)) {
+    if (i === undefined) return;
+    const t = this.tileFor(x, z);
+    if (!t) return;
+    const flags = this.chunks[i + 3];
+    const data = this.blockCache[this.dim].get(x + ',' + z);
+    const north = this.blockCache[this.dim].get(x + ',' + (z - 1));
+    const size = TILE * CELL;
+    const lx = (x - t.tx * TILE) * CELL, lz = (z - t.tz * TILE) * CELL;
+    const px = t.img.data;
+    const danger = this.dangerRgb ??= hexToRgb(cssVar('--danger') || '#b33a2b');
+    const hv = data && new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const nv = north && new DataView(north.buffer, north.byteOffset, north.byteLength);
+    for (let cz = 0; cz < CELL; cz++) {
+      for (let cx = 0; cx < CELL; cx++) {
+        const o = ((lz + cz) * size + lx + cx) * 4;
+        const k = cz * CELL + cx;
+        let r, g, b;
+        if (flags & FLAG_DELETED) [r, g, b] = (cx + cz) % 4 < 2 ? danger : danger.map((v) => v * 0.8);
+        else if (!data) {
+          // Not drawn yet: a soft checker so it's clear something is coming.
+          const v = (cx >> 2) + (cz >> 2) & 1 ? 214 : 202;
+          r = v; g = v; b = v - 6;
+        } else {
+          const hgt = hv.getUint16(192 + k * 2, true);
+          if (!hgt) { r = 30; g = 30; b = 34; } else {
+            const nh = cz > 0 ? hv.getUint16(192 + (k - CELL) * 2, true) : nv ? nv.getUint16(192 + (CELL * (CELL - 1) + cx) * 2, true) : 0;
+            const f = !nh ? 0.86 : hgt > nh ? 1 : hgt < nh ? 0.71 : 0.86;
+            r = data[k * 3] * f; g = data[k * 3 + 1] * f; b = data[k * 3 + 2] * f;
+            if (flags & FLAG_PASTED && (cx === 0 || cz === 0)) { r = r * 0.5 + PASTED_RGB[0] * 0.5; g = g * 0.5 + PASTED_RGB[1] * 0.5; b = b * 0.5 + PASTED_RGB[2] * 0.5; }
+          }
+        }
+        px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
+      }
+    }
+    t.dirty = true;
+  }
+
+  flushTiles() {
+    for (const t of this.tiles.values()) {
+      if (!t.dirty) continue;
+      t.ctx.putImageData(t.img, 0, 0);
+      t.dirty = false;
+    }
+  }
+
+  // Reads chunks in batches, nearest the middle of the view first, until every
+  // chunk in this dimension is drawn. The map stays usable meanwhile.
+  async loadBlocks() {
+    if (this.mode !== 'blocks' || this.blockLoading) return;
+    this.blockLoading = true;
+    const dim = this.dim;
+    try {
+      for (;;) {
+        if (this.mode !== 'blocks' || this.dim !== dim || !this.chunks) break;
+        const cache = this.blockCache[dim], failed = this.blockFailed[dim];
+        const todo = [];
+        for (let i = 0; i < this.chunks.length; i += 4) {
+          const id = this.chunks[i] + ',' + this.chunks[i + 1];
+          if (!(this.chunks[i + 3] & FLAG_DELETED) && !cache.has(id) && !failed.has(id)) todo.push(i);
+        }
+        const total = this.chunks.length / 4;
+        if (!todo.length) break;
+        this.loading.hidden = false;
+        this.loading.textContent = `Drawing blocks: ${fmt(total - todo.length)} of ${fmt(total)} chunks`;
+        const { cx, cz } = this.view;
+        const d = (i) => (this.chunks[i] + 0.5 - cx) ** 2 + (this.chunks[i + 1] + 0.5 - cz) ** 2;
+        const batch = todo.length > BLOCK_BATCH ? todo.sort((a, b) => d(a) - d(b)).slice(0, BLOCK_BATCH) : todo;
+        const coords = batch.map((i) => [this.chunks[i], this.chunks[i + 1]]);
+        const r = await this.app.call('blockMap', { dim, coords });
+        if (this.dim !== dim) break;
+        coords.forEach(([x, z], k) => {
+          const id = x + ',' + z;
+          if (r.ok[k]) cache.set(id, r.data.slice(k * RESULT_BYTES, (k + 1) * RESULT_BYTES));
+          else failed.add(id);
+        });
+        if (this.mode !== 'blocks') continue;
+        for (const [x, z] of coords) {
+          this.paintBlockChunk(x, z);
+          if (this.index.has(x + ',' + (z + 1))) this.paintBlockChunk(x, z + 1); // its shading looks north
+        }
+        this.flushTiles();
+        this.draw();
+      }
+    } catch (e) {
+      toast(`Couldn't draw the blocks: ${e.message}`, true);
+    } finally {
+      this.blockLoading = false;
+      this.loading.hidden = true;
+    }
+    // The view may have changed dimension or mode while this batch was running.
+    if (this.mode === 'blocks' && this.dim !== dim) this.loadBlocks();
+  }
+
   renderLegend() {
     const sw = (color, text) => h('div', {}, h('span', { class: 'legend-swatch', style: { background: color } }), text);
     const danger = cssVar('--danger') || '#b33a2b';
     const pasted = sw(`rgb(${PASTED_RGB})`, 'pasted');
     const regen = sw(danger, 'will regenerate');
+    if (this.mode === 'blocks') {
+      clear(this.legend, h('div', { class: 'muted' }, 'The top block of each spot, shaded'), h('div', { class: 'muted' }, 'like an in-game map'), sw(`rgb(${PASTED_RGB})`, 'pasted (edge)'), regen);
+      return;
+    }
     if (this.mode === 'size') clear(this.legend, sw('rgb(214,230,190)', 'less data than most'), sw('rgb(28,60,40)', 'more data (often builds)'), pasted, regen);
     else if (this.mode === 'blockEntities') clear(this.legend, sw('rgb(230,150,40)', 'has block entities'), pasted, regen);
     else if (this.mode === 'entities') clear(this.legend, sw('rgb(140,90,210)', 'has entities'), pasted, regen);
@@ -225,6 +376,9 @@ export class MapView {
     this.canvas.width = Math.round(r.width * dpr);
     this.canvas.height = Math.round(r.height * dpr);
     this.w = r.width; this.hgt = r.height; this.dpr = dpr;
+    // The toolbar wraps on narrow screens; keep the grid labels and loading note below it.
+    this.toolbarBottom = this.toolbar.getBoundingClientRect().bottom - r.top + 6;
+    this.loading.style.top = `${this.toolbarBottom + 24}px`;
     if (this.needFit) this.fit();
     this.draw();
   }
@@ -248,6 +402,7 @@ export class MapView {
   // Screen positions of the player dots in this dimension.
   playerDots() {
     const out = [];
+    if (!this.showPlayers) return out;
     for (const p of this.app.players) {
       const s = p.summary;
       if (!s || !s.pos || s.dim !== this.dim) continue;
@@ -281,20 +436,7 @@ export class MapView {
       const [sx, sy] = this.toScreen(bx, bz);
       ctx.drawImage(t.canvas, sx, sy, TILE * scale, TILE * scale);
     }
-    // Chunk grid when zoomed in, region grid (32 chunks) when zoomed out a bit.
-    const step = scale >= 6 ? 1 : scale >= 0.5 ? 32 : 512;
-    ctx.strokeStyle = cssVar('--line');
-    ctx.globalAlpha = step === 1 ? 0.5 : 0.35;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let gx = Math.floor(x0 / step) * step; gx <= x1; gx += step) { const [sx] = this.toScreen(gx, 0); ctx.moveTo(Math.round(sx) + 0.5, 0); ctx.lineTo(Math.round(sx) + 0.5, this.hgt); }
-    for (let gz = Math.floor(z0 / step) * step; gz <= z1; gz += step) { const [, sy] = this.toScreen(0, gz); ctx.moveTo(0, Math.round(sy) + 0.5); ctx.lineTo(this.w, Math.round(sy) + 0.5); }
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-    // Origin
-    const [ox, oy] = this.toScreen(0, 0);
-    ctx.strokeStyle = cssVar('--muted');
-    ctx.beginPath(); ctx.moveTo(ox - 8, oy); ctx.lineTo(ox + 8, oy); ctx.moveTo(ox, oy - 8); ctx.lineTo(ox, oy + 8); ctx.stroke();
+    this.drawGrid(ctx, x0, z0, x1, z1);
     // Players
     ctx.font = '600 11px system-ui, sans-serif';
     for (const { p, px, py } of this.playerDots()) {
@@ -340,6 +482,77 @@ export class MapView {
       ctx.strokeRect(sx, sy, Math.max(ex - sx, 2), Math.max(ey - sy, 2));
       ctx.lineWidth = 1;
     }
+  }
+
+  // Faint chunk lines when zoomed in, and labelled lines every round number of
+  // blocks (100, 500, 1000...) at a spacing that suits the zoom.
+  drawGrid(ctx, x0, z0, x1, z1) {
+    const { scale } = this.view;
+    const line = cssVar('--line'), text = cssVar('--text'), panel = cssVar('--panel');
+    ctx.lineWidth = 1;
+    if (scale >= 6) {
+      ctx.strokeStyle = line;
+      ctx.globalAlpha = 0.45;
+      ctx.beginPath();
+      for (let gx = Math.floor(x0); gx <= x1; gx++) { const [sx] = this.toScreen(gx, 0); ctx.moveTo(Math.round(sx) + 0.5, 0); ctx.lineTo(Math.round(sx) + 0.5, this.hgt); }
+      for (let gz = Math.floor(z0); gz <= z1; gz++) { const [, sy] = this.toScreen(0, gz); ctx.moveTo(0, Math.round(sy) + 0.5); ctx.lineTo(this.w, Math.round(sy) + 0.5); }
+      ctx.stroke();
+    }
+    const pxPerBlock = scale / 16;
+    const step = GRID_STEPS.find((s) => s * pxPerBlock >= 110) ?? GRID_STEPS[GRID_STEPS.length - 1];
+    const bx0 = Math.ceil((x0 * 16) / step) * step, bz0 = Math.ceil((z0 * 16) / step) * step;
+    ctx.strokeStyle = text;
+    ctx.globalAlpha = 0.28;
+    ctx.beginPath();
+    for (let b = bx0; b <= x1 * 16; b += step) { const [sx] = this.toScreen(b / 16, 0); ctx.moveTo(Math.round(sx) + 0.5, 0); ctx.lineTo(Math.round(sx) + 0.5, this.hgt); }
+    for (let b = bz0; b <= z1 * 16; b += step) { const [, sy] = this.toScreen(0, b / 16); ctx.moveTo(0, Math.round(sy) + 0.5); ctx.lineTo(this.w, Math.round(sy) + 0.5); }
+    ctx.stroke();
+    // The x = 0 and z = 0 lines a little stronger.
+    const [ox, oy] = this.toScreen(0, 0);
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath(); ctx.moveTo(Math.round(ox) + 0.5, 0); ctx.lineTo(Math.round(ox) + 0.5, this.hgt); ctx.moveTo(0, Math.round(oy) + 0.5); ctx.lineTo(this.w, Math.round(oy) + 0.5); ctx.stroke();
+    ctx.globalAlpha = 1;
+    // Labels: x along the top (below the toolbar), z down the left side.
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    const label = (t, x, y, align) => {
+      const w = ctx.measureText(t).width + 8;
+      const lx = align === 'center' ? x - w / 2 : x;
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = panel;
+      ctx.fillRect(lx, y - 8, w, 16);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = text;
+      ctx.fillText(t, lx + 4, y);
+    };
+    const top = this.toolbarBottom ?? 56;
+    for (let b = bx0; b <= x1 * 16; b += step) { const [sx] = this.toScreen(b / 16, 0); if (sx > 60) label(`x ${fmt(b)}`, sx, top + 10, 'center'); }
+    for (let b = bz0; b <= z1 * 16; b += step) { const [, sy] = this.toScreen(0, b / 16); if (sy > top + 26 && sy < this.hgt - 40) label(`z ${fmt(b)}`, 4, sy, 'left'); }
+    ctx.textBaseline = 'alphabetic';
+    // Where "Go to" took us.
+    if (this.gotoMark) {
+      const [gx, gy] = this.toScreen(this.gotoMark[0] / 16, this.gotoMark[1] / 16);
+      ctx.strokeStyle = '#f0a020';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(gx, gy, 9, 0, Math.PI * 2); ctx.moveTo(gx - 15, gy); ctx.lineTo(gx - 5, gy); ctx.moveTo(gx + 5, gy); ctx.lineTo(gx + 15, gy);
+      ctx.moveTo(gx, gy - 15); ctx.lineTo(gx, gy - 5); ctx.moveTo(gx, gy + 5); ctx.lineTo(gx, gy + 15); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+  }
+
+  gotoForm() {
+    const input = h('input', { type: 'text', placeholder: 'Go to x, z', class: 'goto', title: 'Block coordinates, like 1200, -340 (or x y z from the game)' });
+    const go = () => {
+      const nums = (input.value.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
+      if (nums.length < 2) { toast('Type block coordinates, like 1200, -340.', true); return; }
+      const [bx, bz] = nums.length >= 3 ? [nums[0], nums[2]] : nums; // "x y z" copied from the game
+      this.gotoMark = [bx, bz];
+      this.view.scale = Math.max(this.view.scale, 6);
+      this.centerOn(bx / 16, bz / 16);
+      this.loadBlocks();
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    return h('span', { class: 'goto-wrap' }, input, h('button', { onclick: go }, 'Go'));
   }
 
   fit() {
@@ -462,6 +675,15 @@ export class MapView {
 
   // -------------------------------------------------------------------------
   // Copy and paste
+
+  openChunkbase() {
+    const seed = this.app.info.seed;
+    const dims = ['overworld', 'nether', 'end'];
+    const bx = Math.round(this.view.cx * 16), bz = Math.round(this.view.cz * 16);
+    navigator.clipboard?.writeText(seed).catch(() => {});
+    const url = `https://www.chunkbase.com/apps/seed-map#seed=${encodeURIComponent(seed)}&platform=bedrock_1_21&dimension=${dims[this.dim]}&x=${bx}&z=${bz}&zoom=0.5`;
+    window.open(url, '_blank', 'noopener');
+  }
 
   async copySelection(picked) {
     const coords = picked.filter((i) => !(this.chunks[i + 3] & FLAG_DELETED)).map((i) => [this.chunks[i], this.chunks[i + 1]]);
@@ -612,11 +834,20 @@ export class MapView {
 
     const form = this.coordForm();
     const clipCard = this.clipCard();
+    const seed = this.app.info.seed;
+    const [bx, bz] = [Math.round(this.view.cx * 16), Math.round(this.view.cz * 16)];
+    const seedCard = seed ? h('div', { class: 'card' },
+      h('h3', {}, 'World seed'),
+      h('div', { class: 'mono small-text', style: { wordBreak: 'break-all' } }, seed),
+      h('div', { class: 'row', style: { marginTop: '8px' } },
+        h('button', { class: 'small', onclick: () => { navigator.clipboard?.writeText(seed).then(() => toast('Seed copied.'), () => toast(seed)); } }, 'Copy seed'),
+        h('button', { class: 'small', title: 'Opens Chunkbase\'s seed map in a new tab, centred where you are looking', onclick: () => this.openChunkbase() }, 'Open this spot in Chunkbase')),
+      h('p', { class: 'muted small-text', style: { marginBottom: 0 } }, 'Chunkbase shows what the seed generates, which is what regenerated chunks will look like. The seed is copied too, in case you need to paste it there.')) : null;
     const help = h('div', { class: 'card muted small-text' },
       h('p', { style: { marginTop: 0 } }, 'Drag to move, scroll to zoom. To select, use the Select tool or hold Shift while dragging. Click one chunk to look inside it, or a player\'s dot to open their inventory.'),
       h('p', { style: { marginBottom: 0 } }, 'Regenerated chunks come back fresh from the world seed the next time a player comes near. Builds, chests, signs and mobs in them are removed.'));
 
-    if (!s || this.pasting) { clear(this.side, head, clipCard, form, help); return; }
+    if (!s || this.pasting) { clear(this.side, head, clipCard, form, seedCard, help); return; }
 
     const picked = this.selectedChunks();
     const del = picked.filter((i) => this.chunks[i + 3] & FLAG_DELETED).length;
@@ -659,7 +890,7 @@ export class MapView {
         }, 'Undo regenerate') : null,
         h('button', { class: 'ghost', onclick: () => { this.sel = null; this.renderSide(); this.draw(); } }, 'Clear')));
 
-    clear(this.side, head, selCard, clipCard, form, help);
+    clear(this.side, head, selCard, clipCard, form, seedCard, help);
 
     if (w * d === 1 && picked.length === 1) {
       const detail = await this.app.call('chunkDetail', { dim: this.dim, x: s.x0, z: s.z0 });

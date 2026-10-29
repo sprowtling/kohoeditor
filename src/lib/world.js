@@ -13,6 +13,7 @@ import {
 } from './keys.js';
 import { summarizePlayer } from './items.js';
 import { extractSurface } from './biomes.js';
+import { renderChunk } from './blockmap.js';
 import { Reader, Writer, toHex, fromHex, utf8, fromUtf8, printableKey } from './bytes.js';
 import { deflateSync, inflateSync } from '../../vendor/fflate.js';
 
@@ -371,6 +372,30 @@ export class World {
       s += 48;
     }
     return { list, surface };
+  }
+
+  // Subchunk indices a chunk has (its vertical sections of blocks).
+  chunkSubs(dim, x, z) {
+    const c = this.chunks?.[dim]?.get(x + ',' + z);
+    if (!c) return [];
+    const out = [];
+    for (const p of c.parts) { const { tag, sub } = unpackPart(p); if (tag === TAG_SUBCHUNK) out.push(sub); }
+    return out;
+  }
+
+  // True when a chunk's blocks come from pending changes rather than the file
+  // (pasted chunks), so the block map must read them through get().
+  chunkFromEdits(dim, x, z) {
+    return !!this.chunks?.[dim]?.get(x + ',' + z)?.pasted;
+  }
+
+  // The chunk seen from above, for the block map (see blockmap.js).
+  renderBlocks(dim, x, z) {
+    try {
+      return renderChunk(this.chunkSubs(dim, x, z), (s) => this.get(chunkKey(x, z, dim, TAG_SUBCHUNK, s)));
+    } catch {
+      return null;
+    }
   }
 
   chunkKeys(dim, x, z) {

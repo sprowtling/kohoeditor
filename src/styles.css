@@ -261,6 +261,13 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
   background: #f0a020; color: #2b1c00; border-radius: 8px; padding: 8px 12px; font-weight: 600;
   display: flex; gap: 12px; align-items: center; box-shadow: 0 4px 14px rgba(0,0,0,0.2); max-width: calc(100% - 24px);
 }
+.map-loading {
+  position: absolute; right: 12px; top: 60px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px 10px; font-size: 12.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.goto-wrap { display: inline-flex; gap: 4px; }
+.goto { width: 130px; }
+.button.toggle { gap: 6px; }
 .check { display: flex; gap: 6px; align-items: center; margin-top: 8px; cursor: pointer; }
 .map-legend { position: absolute; right: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font-size: 12px; display: grid; gap: 3px; }
 .legend-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 6px; }

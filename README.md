@@ -12,10 +12,19 @@ changes, and save it again.
   `netherite` or `tnt`). Give players nicknames and notes, or import the
   spreadsheet you already keep (see *Player names* below).
 - **Map**: a top-down map of every chunk that exists in the Overworld, Nether
-  and End, shaded by how much is built, by **biome** (with gentle hill
-  shading), or by where the chests and mobs are. Player dots show where
-  everyone logged off; click one to open that player. Select chunks by
-  dragging or by typing block coordinates, then:
+  and End. Views:
+  - **Blocks from above**: the actual top block of every spot, coloured and
+    shaded like an in-game map, so builds, roads and towns stand out. It's
+    drawn in the background, starting wherever you're looking.
+  - **Biomes** (with gentle hill shading), **amount of data**, and where the
+    chests and mobs are.
+
+  A grid labelled with block coordinates scales with the zoom, and **Go to**
+  takes you to any coordinates (paste `x y z` straight from the game).
+  Player dots show where everyone logged off (click one to open that player,
+  or hide them all with the **Players** switch). **Open this spot in
+  Chunkbase** shows what the world seed generates at the same place. Select
+  chunks by dragging or by typing block coordinates, then:
   - **regenerate** them from the seed, or
   - **copy** them and **paste** them somewhere else, in this world or (by
     saving a `.kohochunks` file) in a different world. Chests, signs and mobs
@@ -165,6 +174,8 @@ src/lib/zip.js        .mcworld (zip) reading and writing
 src/lib/export.js     writes the edited world out piece by piece
 src/lib/items.js      readable item names, enchantments, containers
 src/lib/biomes.js     biome names and colours, surface biome sampling
+src/lib/blockmap.js   the block view: reading subchunks, colours, top blocks
+src/mapworker.js      helper workers that draw the block view in parallel
 vendor/fflate.js      zlib decompression (MIT licence)
 tests/                unit tests, fixture world, Mojang LevelDB cross-checks
 ```

@@ -4,6 +4,9 @@
 import { World } from './lib/world.js';
 import { ZipFiles, dataOffset } from './lib/zip.js';
 import { writeWorld } from './lib/export.js';
+import { RESULT_BYTES } from './lib/blockmap.js';
+import { chunkKey } from './lib/keys.js';
+import { compareBytes } from './lib/bytes.js';
 import { crc32 } from './lib/crc.js';
 
 const reader = new FileReaderSync();
@@ -53,6 +56,84 @@ let source = null;
 let world = null;
 let input = null;
 
+// Helpers for the block map, kept running while a world is open.
+let mapPool = null;
+function getMapPool() {
+  if (mapPool) return mapPool;
+  const cores = Math.max(1, (self.navigator?.hardwareConcurrency ?? 2) - 1);
+  const n = typeof Worker === 'undefined' ? 0 : Math.min(cores, 6);
+  const helpers = [];
+  for (let i = 0; i < n; i++) {
+    const w = new Worker(new URL('./mapworker.js', import.meta.url), { type: 'module' });
+    const h = { w, waiting: new Map(), next: 1, broken: false };
+    w.onmessage = (ev) => {
+      const m = ev.data;
+      if (m.ready) return;
+      const p = h.waiting.get(m.id);
+      h.waiting.delete(m.id);
+      if (m.error) p?.reject(new Error(m.error)); else p?.resolve(m);
+    };
+    w.onerror = () => { h.broken = true; for (const p of h.waiting.values()) p.reject(new Error('A map helper stopped.')); h.waiting.clear(); };
+    w.postMessage({ init: { files: input.files, mcworld: input.mcworld, root: world.root } });
+    helpers.push(h);
+  }
+  mapPool = {
+    helpers,
+    run(h, dim, job) {
+      return new Promise((resolve, reject) => {
+        const id = h.next++;
+        h.waiting.set(id, { resolve, reject });
+        h.w.postMessage({ id, dim, job }, [job.buffer]);
+      });
+    },
+    close() { for (const h of helpers) h.w.terminate(); },
+  };
+  return mapPool;
+}
+
+// Draws chunks from above for the block map. Returns { coords, data, ok } with
+// RESULT_BYTES bytes per chunk in data, and ok[i] = 0 where nothing could be read.
+async function blockMap({ dim, coords }) {
+  const n = coords.length;
+  const data = new Uint8Array(n * RESULT_BYTES);
+  const ok = new Uint8Array(n);
+  const viaHelpers = [];
+  coords.forEach(([x, z], i) => {
+    if (world.chunkFromEdits(dim, x, z) || !world.chunks[dim].has(x + ',' + z)) {
+      const r = world.renderBlocks(dim, x, z);
+      if (r) { data.set(r, i * RESULT_BYTES); ok[i] = 1; }
+    } else viaHelpers.push(i);
+  });
+  const pool = getMapPool();
+  const helpers = pool.helpers.filter((h) => !h.broken);
+  if (!helpers.length) {
+    for (const i of viaHelpers) {
+      const r = world.renderBlocks(dim, coords[i][0], coords[i][1]);
+      if (r) { data.set(r, i * RESULT_BYTES); ok[i] = 1; }
+    }
+    return { data, ok };
+  }
+  // Share the chunks out between the helpers in database order, so each one
+  // reads a run of neighbouring chunks (which mostly sit in the same files).
+  const keyOf = (i) => chunkKey(coords[i][0], coords[i][1], dim, 0x2f, 0);
+  const keys = new Map(viaHelpers.map((i) => [i, keyOf(i)]));
+  viaHelpers.sort((a, b) => compareBytes(keys.get(a), keys.get(b)));
+  const per = Math.ceil(viaHelpers.length / helpers.length);
+  const groups = helpers.map((_, g) => viaHelpers.slice(g * per, (g + 1) * per));
+  await Promise.all(groups.map(async (group, g) => {
+    if (!group.length) return;
+    const parts = [];
+    for (const i of group) {
+      const [x, z] = coords[i];
+      const subs = world.chunkSubs(dim, x, z);
+      parts.push(x, z, subs.length, ...subs);
+    }
+    const r = await pool.run(helpers[g], dim, Int32Array.from(parts));
+    group.forEach((i, k) => { if (r.ok[k]) { data.set(r.data.subarray(k * RESULT_BYTES, (k + 1) * RESULT_BYTES), i * RESULT_BYTES); ok[i] = 1; } });
+  }));
+  return { data, ok };
+}
+
 // Decompresses table files on several threads at once. Returns a Map of
 // table number -> key summary, or null when it isn't worth it.
 async function parallelSummaries(progress) {
@@ -101,6 +182,8 @@ async function parallelSummaries(progress) {
 
 const methods = {
   open({ files, mcworld, root }) {
+    mapPool?.close();
+    mapPool = null;
     input = { files, mcworld };
     source = mcworld ? zipSource(mcworld) : folderSource(files);
     world = new World(source, root ?? null);
@@ -125,6 +208,7 @@ const methods = {
   otherKeys: () => world.otherKeys,
   record: ({ key }) => world.record(key),
   chunkList: ({ dim }) => world.chunkList(dim),
+  blockMap: (args) => blockMap(args),
   copyChunks: ({ dim, coords }, progress) => world.copyChunks(dim, coords, (f) => progress(f)),
   clipboardInfo: () => world.clipboardInfo(),
   clipboardFile: () => new Blob(world.clipboardFile(), { type: 'application/octet-stream' }),
@@ -172,7 +256,8 @@ self.onmessage = async (ev) => {
     if (!methods[method]) throw new Error(`Unknown method ${method}`);
     if (method !== 'open' && !world) throw new Error('No world is open.');
     const result = await methods[method](args ?? {}, progress);
-    const transfer = result && result.list instanceof Int32Array ? [result.list.buffer, result.surface.buffer] : [];
+    const transfer = result && result.list instanceof Int32Array ? [result.list.buffer, result.surface.buffer]
+      : result && result.data instanceof Uint8Array && result.ok ? [result.data.buffer, result.ok.buffer] : [];
     self.postMessage({ id, result }, transfer);
   } catch (e) {
     console.error(e);
