@@ -153,8 +153,7 @@ test('deleting chunks removes their data and entities, and the game\'s LevelDB f
   w.editRecord(pkey, [{ path: [0, li], action: 'set', value: '31' }]);
   assert.throws(() => w.editRecord(pkey, [{ path: [0, li], action: 'set', value: 'lots' }]), /whole number/);
 
-  const log = w.changeLog();
-  fs.writeFileSync(path.join(dir, log.path), log.bytes);
+  for (const f of w.changeLogFiles()) fs.writeFileSync(path.join(dir, f.path), f.bytes);
 
   // What we expect to read back.
   const want = { ...expected };
@@ -194,7 +193,7 @@ test('a .mcworld can be read in place and rebuilt with a new file added', () => 
   const w = new World({ paths: zip.entries.map((e) => e.name), open: (p) => zip.open(p) });
   assert.deepEqual(w.scan().chunks, [145, 36, 16]);
   w.deleteChunks(1, [[0, 0]]);
-  const log = w.changeLog();
+  const [log] = w.changeLogs().files;
   // Rebuild, copying entries without recompressing them.
   const rebuilt = zip.entries.map((e) => {
     const start = e.localOffset + 30 + e.name.length;

@@ -31,7 +31,6 @@ export function copyFixture() {
 
 // Writes a world's pending changes to its folder, the way a saved .mcworld would hold them.
 export function saveInPlace(world, dir) {
-  const log = world.changeLog();
-  if (log.ops) fs.writeFileSync(path.join(dir, log.path), log.bytes);
+  for (const f of world.changeLogFiles()) fs.writeFileSync(path.join(dir, f.path), f.bytes);
   for (const f of world.changedFiles()) fs.writeFileSync(path.join(dir, f.path), f.bytes);
 }

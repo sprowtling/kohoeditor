@@ -313,6 +313,18 @@ $('save-world').addEventListener('click', async () => {
     ok: 'Build .mcworld',
   });
   if (!ok) return;
+  const name = `${(app.info.levelName || 'world').replace(/[\\/:*?"<>|]+/g, '_')} (edited).mcworld`;
+  // Chrome and Edge can write the file straight to disk as it's built, which
+  // works for worlds of any size. Elsewhere it's built in memory and downloaded.
+  let handle = null;
+  if (window.showSaveFilePicker) {
+    try {
+      handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'Minecraft world', accept: { 'application/octet-stream': ['.mcworld'] } }] });
+    } catch (e) {
+      if (e.name === 'AbortError') return; // they closed the save dialog
+      handle = null;
+    }
+  }
   const overlay = h('div', { class: 'modal-back' }, h('div', { class: 'modal' },
     h('h2', {}, 'Building your world file'),
     h('div', { class: 'bar' }, h('div', { class: 'bar-fill' })),
@@ -321,26 +333,26 @@ $('save-world').addEventListener('click', async () => {
   const fill = overlay.querySelector('.bar-fill');
   const step = overlay.querySelector('.save-step');
   try {
-    const bar = overlay.querySelector('.bar');
-    const out = await call('exportWorld', null, (v, label) => {
-      // Writing the changes is one step with no progress to report; packing reports as it goes.
-      const measured = label !== 'Writing your changes';
-      bar.classList.toggle('indeterminate', !measured);
+    const out = await call('exportWorld', { handle }, (v, label) => {
       fill.style.width = `${Math.round(v * 100)}%`;
-      if (label) step.textContent = measured ? `${label}… ${Math.round(v * 100)}%` : `${label}…`;
+      if (label) step.textContent = `${label}… ${Math.round(v * 100)}%`;
     });
-    const url = URL.createObjectURL(out.blob);
-    const name = `${(app.info.levelName || 'world').replace(/[\\/:*?"<>|]+/g, '_')} (edited).mcworld`;
-    const a = h('a', { href: url, download: name });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
     overlay.remove();
-    toast(`Saved ${name} (${formatBytes(out.blob.size)}).`);
+    if (out.saved) {
+      toast(`Saved ${handle.name} (${formatBytes(out.bytes)}).`);
+    } else {
+      const url = URL.createObjectURL(out.blob);
+      const a = h('a', { href: url, download: name });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
+      toast(`Saved ${name} (${formatBytes(out.blob.size)}).`);
+    }
   } catch (e) {
     overlay.remove();
-    toast(`Saving failed: ${e.message}`, true);
+    const big = /2 ?GB|could not be read|NotReadable|allocation|memory/i.test(e.message);
+    toast(`Saving failed: ${e.message}${big && !handle ? ' This browser has to hold the whole file in memory; Chrome or Edge can save worlds of any size.' : ''}`, true);
   }
 });
 

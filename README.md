@@ -48,9 +48,13 @@ anywhere, and your original files are never changed.
    button at the top lists everything waiting to be saved, and each change can
    be undone.
 4. **Save edited world** builds a new `.mcworld` with your changes in it.
-   Open it in Minecraft once to check it, then upload it: for a Realm, use
-   **Replace World** in the Realm's settings; for a server, upload the world
-   folder the way you normally would.
+   In Chrome and Edge it asks where to save the file, then writes it straight
+   to disk as it's built, so worlds of any size save fine. Other browsers
+   build the file in memory and download it, which can fail for very large
+   worlds (a couple of GB or more); use Chrome or Edge for those.
+   Open the new file in Minecraft once to check it, then upload it: for a
+   Realm, use **Replace World** in the Realm's settings; for a server, upload
+   the world folder the way you normally would.
 
 Always keep your original download somewhere safe.
 
@@ -107,7 +111,9 @@ writes your changes as one new `.log` file and leaves every existing file
 exactly as it was. When Minecraft next opens the world, LevelDB replays the
 log and absorbs the changes, as if the game had made them itself.
 
-The writer is tested against Mojang's own LevelDB library. See *Tests* below.
+Large sets of changes are split over several log files (about 128 MB each),
+which LevelDB replays in order. The writer is tested against Mojang's own
+LevelDB library. See *Tests* below.
 
 ## Running it
 
@@ -156,6 +162,7 @@ src/lib/nbt.js        little-endian NBT reader and writer
 src/lib/keys.js       what each database key means
 src/lib/world.js      the world model: scan, players, chunks, edits
 src/lib/zip.js        .mcworld (zip) reading and writing
+src/lib/export.js     writes the edited world out piece by piece
 src/lib/items.js      readable item names, enchantments, containers
 src/lib/biomes.js     biome names and colours, surface biome sampling
 vendor/fflate.js      zlib decompression (MIT licence)

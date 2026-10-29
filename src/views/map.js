@@ -697,8 +697,10 @@ export class MapView {
       this.centerOn(cx, cz);
       this.renderSide();
     };
-    const pasteX = h('input', { type: 'number', step: 1, placeholder: 'block X' });
-    const pasteZ = h('input', { type: 'number', step: 1, placeholder: 'block Z' });
+    // Typed paste coordinates survive the panel being redrawn (it is, after every change).
+    this.pasteTyped ??= { x: '', z: '' };
+    const pasteX = h('input', { type: 'number', step: 1, placeholder: 'block X', value: this.pasteTyped.x, oninput: (e) => { this.pasteTyped.x = e.target.value; } });
+    const pasteZ = h('input', { type: 'number', step: 1, placeholder: 'block Z', value: this.pasteTyped.z, oninput: (e) => { this.pasteTyped.z = e.target.value; } });
     const pasteTyped = () => {
       if (pasteX.value === '' || pasteZ.value === '') { toast('Enter the block X and Z for the corner.', true); return; }
       const x = Math.floor(Number(pasteX.value) / 16), z = Math.floor(Number(pasteZ.value) / 16);

@@ -144,18 +144,24 @@ function dosDateTime(d = new Date()) {
   };
 }
 
-// entries: [{ name, method, crc, compSize, size, data, time?, date? }] where
-// data is whatever the caller's output accepts (a Blob, a Blob slice, or a
-// Uint8Array) holding exactly compSize bytes.
-// Returns a list of parts that, concatenated, form the zip file.
-export function buildZip(entries) {
-  const parts = [];
-  const central = new Writer(1 << 16);
-  let offset = 0;
-  const now = dosDateTime();
-  for (const e of entries) {
+// Writes a zip one entry at a time, so a caller can stream it straight to disk.
+// add() returns the parts for one entry (its header and its data); finish()
+// returns the directory at the end. An entry is
+// { name, method, crc, compSize, size, data, time?, date? }, where data is
+// whatever the output accepts (a Blob, a Blob slice, or a Uint8Array)
+// holding exactly compSize bytes. Zip64 is used wherever sizes need it.
+export class ZipWriter {
+  constructor() {
+    this.central = new Writer(1 << 16);
+    this.offset = 0;
+    this.count = 0;
+    this.now = dosDateTime();
+  }
+
+  add(e) {
     const name = utf8(e.name);
-    const time = e.time ?? now.time, date = e.date ?? now.date;
+    const time = e.time ?? this.now.time, date = e.date ?? this.now.date;
+    const offset = this.offset;
     const big = e.size >= U32 || e.compSize >= U32 || offset >= U32;
     const h = new Writer(30 + name.length + 20);
     h.u32(SIG_LOCAL);
@@ -171,51 +177,63 @@ export function buildZip(entries) {
     h.bytes(name);
     if (big) { h.u16(1); h.u16(16); h.u64n(e.size); h.u64n(e.compSize); }
     const header = h.result();
-    parts.push(header);
-    if (e.compSize > 0) parts.push(e.data);
 
-    central.u32(SIG_CENTRAL);
-    central.u16(big ? 45 : 20); central.u16(big ? 45 : 20);
-    central.u16(0x0800);
-    central.u16(e.method);
-    central.u16(time); central.u16(date);
-    central.u32(e.crc);
-    central.u32(big ? U32 : e.compSize);
-    central.u32(big ? U32 : e.size);
-    central.u16(name.length);
-    central.u16(big ? 28 : 0);
-    central.u16(0); central.u16(0); central.u16(0);
-    central.u32(0);
-    central.u32(big ? U32 : offset);
-    central.bytes(name);
-    if (big) { central.u16(1); central.u16(24); central.u64n(e.size); central.u64n(e.compSize); central.u64n(offset); }
-    offset += header.length + e.compSize;
+    const c = this.central;
+    c.u32(SIG_CENTRAL);
+    c.u16(big ? 45 : 20); c.u16(big ? 45 : 20);
+    c.u16(0x0800);
+    c.u16(e.method);
+    c.u16(time); c.u16(date);
+    c.u32(e.crc);
+    c.u32(big ? U32 : e.compSize);
+    c.u32(big ? U32 : e.size);
+    c.u16(name.length);
+    c.u16(big ? 28 : 0);
+    c.u16(0); c.u16(0); c.u16(0);
+    c.u32(0);
+    c.u32(big ? U32 : offset);
+    c.bytes(name);
+    if (big) { c.u16(1); c.u16(24); c.u64n(e.size); c.u64n(e.compSize); c.u64n(offset); }
+    this.offset += header.length + e.compSize;
+    this.count++;
+    return e.compSize > 0 ? [header, e.data] : [header];
   }
-  const cd = central.result();
-  parts.push(cd);
-  const cdOffset = offset;
-  const tail = new Writer(100);
-  const needs64 = entries.length >= 0xffff || cdOffset >= U32 || cd.length >= U32;
-  if (needs64) {
-    const z64At = cdOffset + cd.length;
-    tail.u32(SIG_ZIP64_EOCD);
-    tail.u64n(44);
-    tail.u16(45); tail.u16(45);
-    tail.u32(0); tail.u32(0);
-    tail.u64n(entries.length); tail.u64n(entries.length);
-    tail.u64n(cd.length); tail.u64n(cdOffset);
-    tail.u32(SIG_ZIP64_LOCATOR);
-    tail.u32(0);
-    tail.u64n(z64At);
-    tail.u32(1);
+
+  finish() {
+    const cd = this.central.result();
+    const cdOffset = this.offset;
+    const n = this.count;
+    const tail = new Writer(100);
+    const needs64 = n >= 0xffff || cdOffset >= U32 || cd.length >= U32;
+    if (needs64) {
+      const z64At = cdOffset + cd.length;
+      tail.u32(SIG_ZIP64_EOCD);
+      tail.u64n(44);
+      tail.u16(45); tail.u16(45);
+      tail.u32(0); tail.u32(0);
+      tail.u64n(n); tail.u64n(n);
+      tail.u64n(cd.length); tail.u64n(cdOffset);
+      tail.u32(SIG_ZIP64_LOCATOR);
+      tail.u32(0);
+      tail.u64n(z64At);
+      tail.u32(1);
+    }
+    tail.u32(SIG_EOCD);
+    tail.u16(0); tail.u16(0);
+    tail.u16(needs64 ? 0xffff : n);
+    tail.u16(needs64 ? 0xffff : n);
+    tail.u32(needs64 ? U32 : cd.length);
+    tail.u32(needs64 ? U32 : cdOffset);
+    tail.u16(0);
+    return [cd, tail.result()];
   }
-  tail.u32(SIG_EOCD);
-  tail.u16(0); tail.u16(0);
-  tail.u16(needs64 ? 0xffff : entries.length);
-  tail.u16(needs64 ? 0xffff : entries.length);
-  tail.u32(needs64 ? U32 : cd.length);
-  tail.u32(needs64 ? U32 : cdOffset);
-  tail.u16(0);
-  parts.push(tail.result());
+}
+
+// The whole zip as a list of parts that, concatenated, form the file.
+export function buildZip(entries) {
+  const zw = new ZipWriter();
+  const parts = [];
+  for (const e of entries) parts.push(...zw.add(e));
+  parts.push(...zw.finish());
   return parts;
 }

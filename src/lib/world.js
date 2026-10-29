@@ -494,8 +494,9 @@ export class World {
     return encodeClipboard(this.clipboard);
   }
 
-  loadClipboard(bytes) {
-    this.clipboard = decodeClipboard(bytes);
+  // file: { size, read(offset, length) }, or a Uint8Array.
+  loadClipboard(file) {
+    this.clipboard = decodeClipboard(file);
     return clipboardInfo(this.clipboard);
   }
 
@@ -666,11 +667,16 @@ export class World {
     return { total, chunks, pasted, operations, count: operations.length };
   }
 
-  // The new database log holding every pending change, ready to add to db/.
-  changeLog() {
+  // The new database log files holding every pending change, ready to add to
+  // db/. Yields { path, bytes } one file at a time, so a caller can hand each
+  // one off (to a Blob, to disk) before the next is built.
+  *changeLogFiles(maxFileBytes) {
     const ops = [...this.edits.values()].map((e) => ({ key: e.key, value: e.value }));
-    const log = this.db.buildChangeLog(ops);
-    return { path: this.root + 'db/' + log.name, bytes: log.bytes, ops: ops.length };
+    for (const f of this.db.changeLogFiles(ops, maxFileBytes)) yield { path: this.root + 'db/' + f.name, bytes: f.bytes };
+  }
+
+  changeLogs(maxFileBytes) {
+    return { files: [...this.changeLogFiles(maxFileBytes)], ops: this.edits.size };
   }
 }
 
@@ -916,13 +922,42 @@ function clipboardInfo(clip, bytes) {
   };
 }
 
+// Version 2 files are a series of separately deflated frames, each holding a
+// group of whole chunks, so neither writing nor reading ever needs one piece
+// of data bigger than a frame (browsers can't hold single pieces over 2 GB).
+const FRAME_HEADER = 1, FRAME_CHUNKS = 2, FRAME_META = 3;
+const FRAME_BYTES = 32 << 20;
+
+// Returns the file as a list of parts (Uint8Arrays) to put in a Blob or join.
 export function encodeClipboard(clip) {
-  const w = new Writer(1 << 20);
-  const header = utf8(JSON.stringify({ world: clip.world, dim: clip.dim, created: clip.created, count: clip.chunks.length }));
-  w.u32(header.length);
-  w.bytes(header);
-  w.u32(clip.chunks.length);
+  const parts = [];
+  const head = new Uint8Array(CLIP_MAGIC.length + 4);
+  head.set(utf8(CLIP_MAGIC));
+  new DataView(head.buffer).setUint32(CLIP_MAGIC.length, 2, true);
+  parts.push(head);
+  const frame = (kind, body) => {
+    const packed = deflateSync(body, { level: 6 });
+    const h = new Uint8Array(5);
+    h[0] = kind;
+    new DataView(h.buffer).setUint32(1, packed.length, true);
+    parts.push(h, packed);
+  };
+  frame(FRAME_HEADER, utf8(JSON.stringify({ world: clip.world, dim: clip.dim, created: clip.created, count: clip.chunks.length })));
+  let w = null, n = 0;
+  const flush = () => {
+    if (!n) return;
+    const body = w.result();
+    const out = new Uint8Array(body.length + 4);
+    new DataView(out.buffer).setUint32(0, n, true);
+    out.set(body, 4);
+    frame(FRAME_CHUNKS, out);
+    w = null; n = 0;
+  };
   for (const c of clip.chunks) {
+    let size = 16;
+    for (const r of c.records) size += 7 + r.value.length;
+    for (const e of c.entities) size += 4 + e.length;
+    if (!w) w = new Writer(Math.max(size, FRAME_BYTES + (1 << 20)));
     w.i32(c.x); w.i32(c.z);
     w.u32(c.records.length);
     for (const r of c.records) {
@@ -934,45 +969,71 @@ export function encodeClipboard(clip) {
     }
     w.u32(c.entities.length);
     for (const e of c.entities) { w.u32(e.length); w.bytes(e); }
+    n++;
+    if (w.pos >= FRAME_BYTES) flush();
   }
-  w.u32(clip.meta.size);
-  for (const [h, nbt] of clip.meta) { w.bytes(fromHex(h)); w.u32(nbt.length); w.bytes(nbt); }
-  const body = deflateSync(w.result(), { level: 6 });
-  const out = new Uint8Array(CLIP_MAGIC.length + 4 + body.length);
-  out.set(utf8(CLIP_MAGIC));
-  new DataView(out.buffer).setUint32(CLIP_MAGIC.length, 1, true);
-  out.set(body, CLIP_MAGIC.length + 4);
-  return out;
+  flush();
+  const m = new Writer(1024);
+  m.u32(clip.meta.size);
+  for (const [h, nbt] of clip.meta) { m.bytes(fromHex(h)); m.u32(nbt.length); m.bytes(nbt); }
+  frame(FRAME_META, m.result());
+  return parts;
 }
 
-export function decodeClipboard(bytes) {
-  if (bytes.length < CLIP_MAGIC.length + 4 || fromUtf8(bytes.subarray(0, CLIP_MAGIC.length)) !== CLIP_MAGIC) {
+function readChunk(r) {
+  const x = r.i32(), z = r.i32();
+  const records = [];
+  const rc = r.u32();
+  for (let j = 0; j < rc; j++) {
+    const tag = r.u8_();
+    const hasSub = r.u8_();
+    const sub = r.i8();
+    records.push({ tag, sub: hasSub ? sub : null, value: r.bytes(r.u32()) });
+  }
+  const entities = [];
+  const ec = r.u32();
+  for (let j = 0; j < ec; j++) entities.push(r.bytes(r.u32()));
+  return { x, z, records, entities };
+}
+
+function readMeta(r, meta) {
+  const mc = r.u32();
+  for (let i = 0; i < mc; i++) { const h = toHex(r.bytes(8)); meta.set(h, r.bytes(r.u32())); }
+}
+
+// file: { size, read(offset, length) } (or a Uint8Array).
+export function decodeClipboard(file) {
+  if (file instanceof Uint8Array) { const b = file; file = { size: b.length, read: (o, l) => b.subarray(o, o + l) }; }
+  const magicLen = CLIP_MAGIC.length;
+  if (file.size < magicLen + 4 || fromUtf8(file.read(0, magicLen)) !== CLIP_MAGIC) {
     throw new Error('That file is not a Koho Editor chunk file (.kohochunks).');
   }
-  const version = new DataView(bytes.buffer, bytes.byteOffset).getUint32(CLIP_MAGIC.length, true);
-  if (version !== 1) throw new Error('That chunk file was made by a newer version of Koho Editor.');
-  const r = new Reader(inflateSync(bytes.subarray(CLIP_MAGIC.length + 4)));
-  const header = JSON.parse(fromUtf8(r.bytes(r.u32())));
-  const n = r.u32();
+  const version = new DataView(file.read(magicLen, 4).slice().buffer).getUint32(0, true);
   const chunks = [];
-  for (let i = 0; i < n; i++) {
-    const x = r.i32(), z = r.i32();
-    const records = [];
-    const rc = r.u32();
-    for (let j = 0; j < rc; j++) {
-      const tag = r.u8_();
-      const hasSub = r.u8_();
-      const sub = r.i8();
-      records.push({ tag, sub: hasSub ? sub : null, value: r.bytes(r.u32()).slice() });
-    }
-    const entities = [];
-    const ec = r.u32();
-    for (let j = 0; j < ec; j++) entities.push(r.bytes(r.u32()).slice());
-    chunks.push({ x, z, records, entities });
-  }
   const meta = new Map();
-  const mc = r.u32();
-  for (let i = 0; i < mc; i++) { const h = toHex(r.bytes(8)); meta.set(h, r.bytes(r.u32()).slice()); }
+  let header;
+  if (version === 1) {
+    const r = new Reader(inflateSync(file.read(magicLen + 4, file.size - magicLen - 4)));
+    header = JSON.parse(fromUtf8(r.bytes(r.u32())));
+    const n = r.u32();
+    for (let i = 0; i < n; i++) chunks.push(readChunk(r));
+    readMeta(r, meta);
+  } else if (version === 2) {
+    let pos = magicLen + 4;
+    while (pos + 5 <= file.size) {
+      const h = file.read(pos, 5);
+      const kind = h[0];
+      const len = new DataView(h.slice().buffer).getUint32(1, true);
+      const r = new Reader(inflateSync(file.read(pos + 5, len)));
+      pos += 5 + len;
+      if (kind === FRAME_HEADER) header = JSON.parse(fromUtf8(r.bytes(r.remaining)));
+      else if (kind === FRAME_CHUNKS) { const n = r.u32(); for (let i = 0; i < n; i++) chunks.push(readChunk(r)); }
+      else if (kind === FRAME_META) readMeta(r, meta);
+    }
+    if (!header) throw new Error('That chunk file is damaged.');
+  } else {
+    throw new Error('That chunk file was made by a newer version of Koho Editor.');
+  }
   return makeClipboard({ world: header.world, dim: header.dim, chunks, meta, created: header.created });
 }
 

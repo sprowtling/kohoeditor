@@ -8,7 +8,8 @@ import { Table, summarizeTable } from '../src/lib/leveldb.js';
 import { extractSurface, biomeName } from '../src/lib/biomes.js';
 import { chunkKey, digpKey, actorKey } from '../src/lib/keys.js';
 import { parse, parseAll, serialize, toPlain, val, T } from '../src/lib/nbt.js';
-import { toHex, fromHex, utf8, equalBytes } from '../src/lib/bytes.js';
+import { toHex, fromHex, utf8, equalBytes, concatBytes, Writer } from '../src/lib/bytes.js';
+import { deflateSync } from '../vendor/fflate.js';
 import { FIXTURE, folderFiles, copyFixture, saveInPlace } from './helpers.mjs';
 
 const P1 = toHex(utf8('player_server_11111111-2222-4333-8444-555555555555'));
@@ -202,7 +203,7 @@ test('pastes, deletes and edits undo cleanly, even when they overlap', () => {
 test('copied chunks travel between worlds in a .kohochunks file', () => {
   const a = open();
   a.copyChunks(0, [[0, 0], [1, 1], [20, 20]]);
-  const file = encodeClipboard(a.clipboard);
+  const file = concatBytes(encodeClipboard(a.clipboard));
   const back = decodeClipboard(file);
   assert.equal(back.chunks.length, 3);
   assert.deepEqual(back.bounds, { x0: 0, z0: 0, x1: 20, z1: 20 });
@@ -224,4 +225,77 @@ test('copied chunks travel between worlds in a .kohochunks file', () => {
   assert.ok(equalBytes(encodeMetaDictionary(dict), b.get(utf8('LevelChunkMetaDataDictionary'))));
   // The old-format chunk pasted along with the rest.
   assert.ok(b.get(chunkKey(120, 120, 0, 0x2d)));
+});
+
+test('big sets of changes are split over several log files that read back as one', () => {
+  const dir = copyFixture();
+  const w = open(dir);
+  w.copyChunks(0, [[0, 0], [1, 1], [2, 2], [3, 3]]);
+  w.pasteChunks(0, 50, 50);
+  w.deleteChunks(1, [[0, 0], [1, 1]]);
+  const { files } = w.changeLogs(2 << 10);
+  assert.ok(files.length > 3, `expected several files, got ${files.length}`);
+  const numbers = files.map((f) => parseInt(f.path.match(/(\d+)\.log$/)[1], 10));
+  numbers.forEach((n, i) => i && assert.equal(n, numbers[i - 1] + 1, 'numbered one after another'));
+  for (const f of files) fs.writeFileSync(`${dir}/${f.path}`, f.bytes);
+  const w2 = open(dir);
+  for (const [h, e] of w.edits) {
+    const got = w2.get(fromHex(h));
+    if (e.value) assert.ok(got && equalBytes(got, e.value), h); else assert.equal(got, null, h);
+  }
+  assert.deepEqual(w2.stats.chunks, [149, 34, 16]);
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('chunk files from the first version still open', () => {
+  // Version 1: magic, version, then one deflated body.
+  const a = open();
+  a.copyChunks(0, [[0, 0], [20, 20]]);
+  const clip = a.clipboard;
+  const w = new Writer(1 << 16);
+  const header = utf8(JSON.stringify({ world: clip.world, dim: clip.dim, created: clip.created, count: clip.chunks.length }));
+  w.u32(header.length); w.bytes(header);
+  w.u32(clip.chunks.length);
+  for (const c of clip.chunks) {
+    w.i32(c.x); w.i32(c.z); w.u32(c.records.length);
+    for (const r of c.records) { w.u8(r.tag); w.u8(r.sub === null ? 0 : 1); w.i8(r.sub ?? 0); w.u32(r.value.length); w.bytes(r.value); }
+    w.u32(c.entities.length);
+    for (const e of c.entities) { w.u32(e.length); w.bytes(e); }
+  }
+  w.u32(0);
+  const body = deflateSync(w.result());
+  const file = concatBytes([utf8('KOHOCHUNKS'), Uint8Array.of(1, 0, 0, 0), body]);
+  const back = decodeClipboard(file);
+  assert.equal(back.chunks.length, 2);
+  assert.equal(back.chunks[0].entities.length, clip.chunks[0].entities.length);
+  back.chunks[1].records.forEach((r, j) => assert.ok(equalBytes(r.value, clip.chunks[1].records[j].value)));
+});
+
+test('the whole edited world can be written out piece by piece', async () => {
+  const { writeWorld } = await import('../src/lib/export.js');
+  const { ZipFiles } = await import('../src/lib/zip.js');
+  const { crc32 } = await import('../src/lib/crc.js');
+  const files = folderFiles(FIXTURE);
+  const w = new World(files);
+  w.scan();
+  w.copyChunks(0, [[0, 0], [1, 1]]);
+  w.pasteChunks(0, 40, 40);
+  const tag = w.currentLevelDat();
+  w.editLevelDat([{ path: [0, tag.v.findIndex((c) => c.n === 'LevelName')], action: 'set', value: 'Streamed' }]);
+  const source = {
+    open: (p) => files.open(p),
+    exportEntry(p, name, onBytes) { const f = files.open(p); const b = f.read(0, f.size); onBytes(b.length); return { name, method: 0, crc: crc32(b), compSize: b.length, size: b.length, data: b }; },
+  };
+  const parts = [];
+  let lastProgress = 0;
+  const r = await writeWorld(w, source, { write: async (part) => { parts.push(part); } }, (f) => { lastProgress = f; });
+  assert.equal(lastProgress, 1);
+  const out = concatBytes(parts);
+  assert.equal(out.length, r.bytes + parts.at(-1).length + parts.at(-2).length);
+  const zip = new ZipFiles({ size: out.length, read: (o, l) => out.subarray(o, o + l) });
+  for (const e of zip.entries) { const f = zip.open(e.name); assert.equal(crc32(f.read(0, f.size)), e.crc, e.name); }
+  const w2 = new World({ paths: zip.entries.map((e) => e.name), open: (p) => zip.open(p) });
+  w2.scan();
+  assert.equal(w2.levelName, 'Streamed');
+  assert.ok(w2.chunks[0].has('40,40') && w2.chunks[0].has('41,41'));
 });

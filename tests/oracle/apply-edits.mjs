@@ -47,8 +47,9 @@ if (p) {
 const want = {};
 w.db.forEach((k, v) => { want[toHex(k)] = toHex(v); });
 for (const [h, e] of w.edits) { if (e.value) want[h] = toHex(e.value); else delete want[h]; }
-const log = w.changeLog();
-fs.writeFileSync(path.join(dst, log.path), log.bytes);
+// Small log files, so the check also covers changes spread over several logs.
+const logFiles = w.changeLogs(16 << 10).files;
+for (const f of logFiles) fs.writeFileSync(path.join(dst, f.path), f.bytes);
 fs.writeFileSync(expectOut, JSON.stringify(want));
 const pend = w.pending();
-console.log(`${pend.chunks.join('/')} chunks regenerated, ${pend.pasted.join('/')} pasted, ${log.ops} changes written to ${log.path}`);
+console.log(`${pend.chunks.join('/')} chunks regenerated, ${pend.pasted.join('/')} pasted, ${w.edits.size} changes written to ${logFiles.length} log files`);

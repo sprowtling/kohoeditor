@@ -2,7 +2,8 @@
 // Files are read synchronously with FileReaderSync, which only exists here.
 
 import { World } from './lib/world.js';
-import { ZipFiles, dataOffset, buildZip } from './lib/zip.js';
+import { ZipFiles, dataOffset } from './lib/zip.js';
+import { writeWorld } from './lib/export.js';
 import { crc32 } from './lib/crc.js';
 
 const reader = new FileReaderSync();
@@ -126,8 +127,8 @@ const methods = {
   chunkList: ({ dim }) => world.chunkList(dim),
   copyChunks: ({ dim, coords }, progress) => world.copyChunks(dim, coords, (f) => progress(f)),
   clipboardInfo: () => world.clipboardInfo(),
-  clipboardFile: () => new Blob([world.clipboardFile()], { type: 'application/octet-stream' }),
-  loadClipboard: ({ file }) => world.loadClipboard(new Uint8Array(new FileReaderSync().readAsArrayBuffer(file))),
+  clipboardFile: () => new Blob(world.clipboardFile(), { type: 'application/octet-stream' }),
+  loadClipboard: ({ file }) => world.loadClipboard(blobFile(file)),
   pasteChunks: ({ dim, x, z, entities }, progress) => world.pasteChunks(dim, x, z, { entities }, (f) => progress(f)),
   undoOperation: ({ id }) => world.undoOperation(id),
   setItem: ({ key, list, slot, item }) => world.setItem(key, list, slot, item),
@@ -142,21 +143,25 @@ const methods = {
   levelDat: () => ({ tag: world.currentLevelDat(), edited: !!world.levelDatEdit }),
 
   // Builds the edited world as a new .mcworld. The original files are not touched.
-  exportWorld(_, progress) {
-    progress(0, 'Writing your changes');
-    const log = world.changeLog();
-    const paths = world.paths.filter((p) => !p.endsWith('/'));
-    let total = 0;
-    for (const p of paths) total += source.open(p)?.size ?? 0;
-    let done = 0;
-    const tick = (n) => { done += n; progress(Math.min(done / Math.max(total, 1), 1), 'Packing the world'); };
-    const replaced = new Map(world.changedFiles().map((f) => [f.path, f.bytes]));
-    const stored = (name, bytes) => ({ name, method: 0, crc: crc32(bytes), compSize: bytes.length, size: bytes.length, data: bytes });
-    const entries = paths.map((p) => (replaced.has(p) ? stored(p.slice(world.root.length), replaced.get(p)) : source.exportEntry(p, p.slice(world.root.length), tick)));
-    for (const [p, bytes] of replaced) if (!paths.includes(p)) entries.push(stored(p.slice(world.root.length), bytes));
-    if (log.ops) entries.push(stored(log.path.slice(world.root.length), log.bytes));
-    const blob = new Blob(buildZip(entries), { type: 'application/octet-stream' });
-    return { blob, ops: log.ops, logName: log.path };
+  // With a file handle (Chrome and Edge), it's written straight to that file as
+  // it's made, so even a very large world never has to fit in memory. Without
+  // one, it becomes a Blob for the page to download.
+  async exportWorld({ handle }, progress) {
+    if (handle) {
+      const out = await handle.createWritable();
+      try {
+        const r = await writeWorld(world, source, { write: (part) => out.write(part) }, progress);
+        await out.close();
+        return { ...r, saved: true };
+      } catch (e) {
+        await out.abort().catch(() => {});
+        throw e;
+      }
+    }
+    const parts = [];
+    // Each piece becomes its own small Blob straight away, which the browser may keep on disk.
+    const r = await writeWorld(world, source, { write: (part) => { parts.push(part instanceof Uint8Array ? new Blob([part]) : part); } }, progress);
+    return { ...r, blob: new Blob(parts, { type: 'application/octet-stream' }) };
   },
 };
 

@@ -677,28 +677,39 @@ export class LevelDB {
     return best && best.type === TYPE_VALUE ? best.value : null;
   }
 
-  // Builds a new log file holding the given operations ({ key, value } puts or { key, value: null } deletes).
-  // Returns { name, bytes } for a file to add next to the existing ones.
-  buildChangeLog(ops) {
-    const number = this.maxFileNumber + 1;
-    const records = [];
+  // Builds new log files holding the given operations ({ key, value } puts or
+  // { key, value: null } deletes), to add next to the existing files. Yields
+  // { name, bytes } one file at a time. Big edits are split over several
+  // files of about maxFileBytes each: browsers can't handle a single piece of
+  // data over 2 GB, and LevelDB replays any number of logs, in number order.
+  *changeLogFiles(ops, maxFileBytes = 128 << 20) {
+    let number = this.maxFileNumber + 1;
     let seq = this.lastSequence + 1;
     // Keep each batch to a moderate size so the game never has to replay one huge record.
     const MAX_BATCH_BYTES = 4 << 20;
+    let records = [], fileBytes = 0;
     let batch = [], bytes = 0;
-    const flush = () => {
+    const flushBatch = () => {
       if (!batch.length) return;
-      records.push(encodeWriteBatch(seq, batch));
+      const rec = encodeWriteBatch(seq, batch);
+      records.push(rec);
+      fileBytes += rec.length;
       seq += batch.length;
       batch = []; bytes = 0;
+    };
+    const takeFile = () => {
+      const out = { name: this.fileName(number++, 'log'), bytes: encodeLogRecords(records) };
+      records = []; fileBytes = 0;
+      return out;
     };
     for (const op of ops) {
       batch.push(op);
       bytes += op.key.length + (op.value ? op.value.length : 0) + 16;
-      if (bytes >= MAX_BATCH_BYTES) flush();
+      if (bytes >= MAX_BATCH_BYTES || fileBytes + bytes >= maxFileBytes) flushBatch();
+      if (fileBytes >= maxFileBytes) yield takeFile();
     }
-    flush();
-    return { name: this.fileName(number, 'log'), bytes: encodeLogRecords(records) };
+    flushBatch();
+    if (records.length) yield takeFile();
   }
 }
 
