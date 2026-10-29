@@ -33,10 +33,65 @@ function startWorker() {
   };
 }
 
+// What to say while something slow is happening. Anything not listed here
+// either has its own progress screen (opening, saving) or is always quick.
+const BUSY_LABELS = {
+  copyChunks: 'Copying chunks',
+  pasteChunks: 'Pasting chunks',
+  deleteChunks: 'Marking chunks to regenerate',
+  restoreChunks: 'Putting chunks back',
+  undoOperation: 'Undoing',
+  loadClipboard: 'Opening the chunk file',
+  clipboardFile: 'Saving the chunk file',
+  chunkList: 'Updating the map',
+  players: 'Reading players',
+  setItem: 'Saving', editRecord: 'Saving', editLevelDat: 'Saving', deleteRecord: 'Saving', revertRecord: 'Undoing',
+};
+
+// A screen-covering "working on it" panel for slow calls. It appears only if a
+// call takes more than a moment, shows progress when the worker reports it,
+// and blocks clicks meanwhile so nothing gets queued up twice by accident.
+const busy = {
+  calls: new Map(),
+  el: null,
+  start(id, label) {
+    this.calls.set(id, { label, progress: null, since: performance.now() });
+    setTimeout(() => this.render(), 250);
+  },
+  progress(id, value) {
+    const c = this.calls.get(id);
+    if (c) { c.progress = value; this.render(); }
+  },
+  end(id) {
+    this.calls.delete(id);
+    this.render();
+  },
+  render() {
+    const shown = [...this.calls.values()].filter((c) => performance.now() - c.since >= 240);
+    if (!shown.length) { this.el?.remove(); this.el = null; return; }
+    const c = shown[shown.length - 1];
+    if (!this.el) {
+      this.el = h('div', { class: 'busy-back' }, h('div', { class: 'busy' },
+        h('div', { class: 'busy-label' }), h('div', { class: 'bar' }, h('div', { class: 'bar-fill' })), h('div', { class: 'busy-note muted small-text' })));
+      document.body.append(this.el);
+    }
+    this.el.querySelector('.busy-label').textContent = `${c.label}…`;
+    const fill = this.el.querySelector('.bar-fill');
+    const bar = this.el.querySelector('.bar');
+    bar.classList.toggle('indeterminate', c.progress == null);
+    if (c.progress != null) fill.style.width = `${Math.round(c.progress * 100)}%`;
+    this.el.querySelector('.busy-note').textContent = c.progress != null ? `${Math.round(c.progress * 100)}%` : 'This can take a little while on a big world.';
+  },
+};
+
 function call(method, args, onProgress) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
-    waiting.set(id, { resolve, reject, onProgress });
+    const label = BUSY_LABELS[method];
+    if (label) busy.start(id, label);
+    const done = (fn) => (v) => { if (label) busy.end(id); fn(v); };
+    const progress = (v, l) => { if (label) busy.progress(id, v); onProgress?.(v, l); };
+    waiting.set(id, { resolve: done(resolve), reject: done(reject), onProgress: progress });
     worker.postMessage({ id, method, args });
   });
 }
@@ -261,11 +316,19 @@ $('save-world').addEventListener('click', async () => {
   const overlay = h('div', { class: 'modal-back' }, h('div', { class: 'modal' },
     h('h2', {}, 'Building your world file'),
     h('div', { class: 'bar' }, h('div', { class: 'bar-fill' })),
-    h('p', { class: 'muted' }, 'This can take a minute for a big world.')));
+    h('p', { class: 'muted save-step' }, 'This can take a minute for a big world.')));
   document.body.append(overlay);
   const fill = overlay.querySelector('.bar-fill');
+  const step = overlay.querySelector('.save-step');
   try {
-    const out = await call('exportWorld', null, (v) => { fill.style.width = `${Math.round(v * 100)}%`; });
+    const bar = overlay.querySelector('.bar');
+    const out = await call('exportWorld', null, (v, label) => {
+      // Writing the changes is one step with no progress to report; packing reports as it goes.
+      const measured = label !== 'Writing your changes';
+      bar.classList.toggle('indeterminate', !measured);
+      fill.style.width = `${Math.round(v * 100)}%`;
+      if (label) step.textContent = measured ? `${label}… ${Math.round(v * 100)}%` : `${label}…`;
+    });
     const url = URL.createObjectURL(out.blob);
     const name = `${(app.info.levelName || 'world').replace(/[\\/:*?"<>|]+/g, '_')} (edited).mcworld`;
     const a = h('a', { href: url, download: name });

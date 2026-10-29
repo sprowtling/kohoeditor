@@ -35,6 +35,14 @@ const TAG_BLOCK_ENTITIES = 0x31, TAG_LEGACY_ENTITIES = 0x32, TAG_PENDING_TICKS =
 // Flags in chunkList()
 export const CHUNK_DELETED = 1, CHUNK_ENTITIES = 2, CHUNK_BLOCK_ENTITIES = 4, CHUNK_EMPTY = 8, CHUNK_PASTED = 16;
 
+// Calls onProgress(fraction) now and then while a long loop runs.
+function progressEvery(total, onProgress) {
+  if (!onProgress || total < 200) return () => {};
+  const step = Math.max(1, Math.floor(total / 100));
+  let i = 0;
+  return () => { if (++i % step === 0) onProgress(i / total); };
+}
+
 const ITEM_LISTS = { Inventory: 'slot', EnderChestInventory: 'slot', Armor: 'index', Offhand: 'index' };
 
 export class World {
@@ -401,9 +409,11 @@ export class World {
 
   // Marks chunks for deletion so the game regenerates them from the seed.
   // Removes block data, block entities and the chunk's entities.
-  deleteChunks(dim, coords) {
+  deleteChunks(dim, coords, onProgress) {
     const op = this.newOp('delete', '', { dim, byChunk: new Map() });
+    const tick = progressEvery(coords.length, onProgress);
     for (const [x, z] of coords) {
+      tick();
       const id = x + ',' + z;
       if (this.deleted[dim].has(id) || !this.chunks[dim].has(id)) continue;
       const hexes = [];
@@ -416,9 +426,11 @@ export class World {
     return op.byChunk.size;
   }
 
-  restoreChunks(dim, coords) {
+  restoreChunks(dim, coords, onProgress) {
     let n = 0;
+    const tick = progressEvery(coords.length, onProgress);
     for (const [x, z] of coords) {
+      tick();
       const id = x + ',' + z;
       const op = this.ops.get(this.deleted[dim].get(id));
       if (!op) continue;
@@ -440,12 +452,14 @@ export class World {
   }
 
   // Copies chunks (with their block entities and entities) to the clipboard.
-  copyChunks(dim, coords) {
+  copyChunks(dim, coords, onProgress) {
+    const tick = progressEvery(coords.length, onProgress);
     const dict = this.metaDictionary();
     const chunks = [];
     const meta = new Map();
     let bytes = 0;
     for (const [x, z] of coords) {
+      tick();
       const id = x + ',' + z;
       const c = this.chunks[dim].get(id);
       if (!c || this.deleted[dim].has(id) || !c.parts.length) continue;
@@ -487,7 +501,8 @@ export class World {
 
   // Pastes the clipboard so its corner chunk (smallest x and z) lands on tx, tz.
   // Destination chunks are replaced completely.
-  pasteChunks(dim, tx, tz, { entities = true } = {}) {
+  pasteChunks(dim, tx, tz, { entities = true } = {}, onProgress) {
+    const tick = progressEvery(this.clipboard?.chunks.length ?? 0, onProgress);
     const clip = this.clipboard;
     if (!clip) throw new Error('Nothing has been copied yet.');
     const dx = tx - clip.bounds.x0, dz = tz - clip.bounds.z0;
@@ -501,6 +516,7 @@ export class World {
       for (const r of ch.records) if (r.tag === TAG_LEGACY_ENTITIES && entities) for (const root of safeRoots(r.value)) noteUidTag(root, uidMap, ids);
     }
     for (const ch of clip.chunks) {
+      tick();
       const x = ch.x + dx, z = ch.z + dz, cid = x + ',' + z;
       // Clear whatever is at the destination.
       for (const k of this.entityKeys(dim, x, z)) this.setEdit(op, k, null, `replaced by paste at ${x}, ${z}`);

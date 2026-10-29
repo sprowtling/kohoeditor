@@ -70,7 +70,10 @@ export function* readLogRecords(u8) {
 }
 
 export function encodeLogRecords(records) {
-  const w = new Writer(1 << 16);
+  // Sized up front: each 32 KB block adds at most a 7 byte header and 6 bytes of padding.
+  let total = 0;
+  for (const r of records) total += r.length + LOG_HEADER;
+  const w = new Writer(total + Math.ceil(total / (LOG_BLOCK - LOG_HEADER)) * (LOG_HEADER + 6) + 64);
   for (const rec of records) {
     let off = 0;
     let first = true;
@@ -113,7 +116,9 @@ export function parseWriteBatch(u8) {
 }
 
 export function encodeWriteBatch(seq, ops) {
-  const w = new Writer(1 << 16);
+  let total = 12;
+  for (const op of ops) total += 1 + 10 + op.key.length + (op.value ? 10 + op.value.length : 0);
+  const w = new Writer(total);
   w.u64n(seq);
   w.u32(ops.length);
   for (const op of ops) {
@@ -191,6 +196,32 @@ class BlockIter {
       shift += 7;
     } while (b >= 0x80 && shift < 35);
     return result >>> 0;
+  }
+  // Jumps close to ukey using the block's restart points (entries stored with
+  // their whole key), so the following next() calls only walk a few entries.
+  seek(ukey) {
+    const d = this.data;
+    const restartsAt = this.limit;
+    const count = (d.length - 4 - restartsAt) / 4;
+    const restart = (i) => (d[restartsAt + i * 4] | (d[restartsAt + i * 4 + 1] << 8) | (d[restartsAt + i * 4 + 2] << 16) | (d[restartsAt + i * 4 + 3] << 24)) >>> 0;
+    let lo = 0, hi = count - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      this.pos = restart(mid);
+      this.varint(); // shared: always 0 at a restart point
+      const nonShared = this.varint();
+      this.varint(); // value length
+      // Compare ukey with the user-key part of the stored internal key.
+      const ulen = nonShared - 8;
+      const n = ukey.length < ulen ? ukey.length : ulen;
+      let c = 0;
+      for (let i = 0; i < n && c === 0; i++) c = ukey[i] - d[this.pos + i];
+      if (c === 0) c = ukey.length - ulen;
+      if (c > 0) lo = mid; else hi = mid - 1;
+    }
+    this.pos = count ? restart(lo) : 0;
+    this.key = EMPTY;
+    this.valid = false;
   }
   next() {
     if (this.pos >= this.limit) { this.valid = false; return false; }
@@ -275,6 +306,7 @@ export class Table {
         this.cache?.set(this.number * 1e10 + off, data);
       }
       const it = new BlockIter(data);
+      it.seek(ukey);
       while (it.next()) {
         const c = compareUserToInternal(ukey, it.key);
         if (c === 0) return { seq: internalSeq(it.key), type: internalType(it.key), value: it.value };

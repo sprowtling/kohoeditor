@@ -513,9 +513,9 @@ export class MapView {
       ok: 'Paste', danger: replaced > 0,
     });
     if (!ok) return;
+    this.stopPasting();
     try {
       const r = await this.app.call('pasteChunks', { dim: this.dim, x, z, entities });
-      this.stopPasting();
       this.sel = { x0: x, z0: z, x1: x + b.x1 - b.x0, z1: z + b.z1 - b.z0 };
       await this.app.refreshPending();
       toast(`Pasted ${fmt(r.count)} chunk${r.count === 1 ? '' : 's'}. Save the world to keep them.`);

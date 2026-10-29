@@ -306,6 +306,12 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 }
 .toast.error { background: var(--danger); color: #fff; }
 
+.busy-back { position: fixed; inset: 0; background: rgba(0,0,0,0.25); display: flex; align-items: center; justify-content: center; z-index: 50; cursor: progress; }
+.busy { background: var(--panel); border-radius: 10px; padding: 18px 20px; width: min(380px, calc(100% - 32px)); box-shadow: 0 12px 40px rgba(0,0,0,0.3); display: grid; gap: 10px; }
+.busy-label { font-weight: 600; }
+.bar.indeterminate .bar-fill { width: 35% !important; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { from { margin-left: -35%; } to { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bar.indeterminate .bar-fill { animation: none; width: 100% !important; opacity: 0.5; } }
 .modal-back { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 40; padding: 16px; }
 .modal { background: var(--panel); border-radius: 10px; padding: 20px; width: min(520px, 100%); box-shadow: 0 12px 40px rgba(0,0,0,0.3); }
 .modal p { margin: 8px 0; }

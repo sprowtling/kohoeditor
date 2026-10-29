@@ -68,7 +68,8 @@ export class Writer {
     this.u8(v);
   }
   lenPrefixed(u8) { this.varint(u8.length); this.bytes(u8); }
-  result() { return this.buf.slice(0, this.pos); }
+  // A view of what was written (no copy; a Writer isn't used again after this).
+  result() { return this.buf.subarray(0, this.pos); }
 }
 
 export function compareBytes(a, b) {

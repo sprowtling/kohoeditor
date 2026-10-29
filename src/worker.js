@@ -124,17 +124,17 @@ const methods = {
   otherKeys: () => world.otherKeys,
   record: ({ key }) => world.record(key),
   chunkList: ({ dim }) => world.chunkList(dim),
-  copyChunks: ({ dim, coords }) => world.copyChunks(dim, coords),
+  copyChunks: ({ dim, coords }, progress) => world.copyChunks(dim, coords, (f) => progress(f)),
   clipboardInfo: () => world.clipboardInfo(),
   clipboardFile: () => new Blob([world.clipboardFile()], { type: 'application/octet-stream' }),
   loadClipboard: ({ file }) => world.loadClipboard(new Uint8Array(new FileReaderSync().readAsArrayBuffer(file))),
-  pasteChunks: ({ dim, x, z, entities }) => world.pasteChunks(dim, x, z, { entities }),
+  pasteChunks: ({ dim, x, z, entities }, progress) => world.pasteChunks(dim, x, z, { entities }, (f) => progress(f)),
   undoOperation: ({ id }) => world.undoOperation(id),
   setItem: ({ key, list, slot, item }) => world.setItem(key, list, slot, item),
   editLevelDat: ({ ops }) => world.editLevelDat(ops),
   chunkDetail: ({ dim, x, z }) => world.chunkDetail(dim, x, z),
-  deleteChunks: ({ dim, coords }) => world.deleteChunks(dim, coords),
-  restoreChunks: ({ dim, coords }) => world.restoreChunks(dim, coords),
+  deleteChunks: ({ dim, coords }, progress) => world.deleteChunks(dim, coords, (f) => progress(f)),
+  restoreChunks: ({ dim, coords }, progress) => world.restoreChunks(dim, coords, (f) => progress(f)),
   editRecord: ({ key, ops }) => world.editRecord(key, ops),
   deleteRecord: ({ key }) => world.deleteRecord(key),
   revertRecord: ({ key }) => world.revertRecord(key),
@@ -143,6 +143,7 @@ const methods = {
 
   // Builds the edited world as a new .mcworld. The original files are not touched.
   exportWorld(_, progress) {
+    progress(0, 'Writing your changes');
     const log = world.changeLog();
     const paths = world.paths.filter((p) => !p.endsWith('/'));
     let total = 0;
