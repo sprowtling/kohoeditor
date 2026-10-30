@@ -50,6 +50,11 @@ changes, and save it again.
   lives inside its item). Copies are grouped, the original is marked, and
   each copy says where it is. Read them with their colours and styles, add
   notes, and download any book, or the whole library, as text.
+- **Pets**: every named mob and every tamed animal (wolves, cats, horses,
+  donkeys, parrots…), who it belongs to (matched to the player, nicknames
+  and all), where it is right now with a button to the map, and details like
+  health, saddle and what a donkey is carrying. Each player's page lists
+  their pets too, and the whole list downloads as a spreadsheet.
 - **Records**: every other entry in the world's database (villages, maps,
   scoreboard, portals and more), shown as a readable NBT tree. Click a value
   to change it.
@@ -198,7 +203,7 @@ src/lib/biomes.js     biome names and colours, surface biome sampling
 src/lib/blockmap.js   the block view: reading subchunks, colours, top blocks
 src/lib/scaninfo.js   what the scan notes per record (biomes; which hold books or maps)
 src/lib/collect.js    finding every book and map item, and where it is
-src/views/art.js, src/views/library.js   the Art and Library tabs
+src/views/art.js, src/views/library.js, src/views/pets.js   the Art, Library and Pets tabs
 src/mapworker.js      helper workers that draw the block view in parallel
 vendor/fflate.js      zlib decompression (MIT licence)
 vendor/seedgen.wasm   cubiomes' biome generator, built by tools/seedgen/build.sh (MIT licence)

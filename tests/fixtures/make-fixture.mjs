@@ -25,12 +25,12 @@ const inv = (items, size) => {
   const by = new Map(items.map((i) => [i.v[3].v, i]));
   return Array.from({ length: size }, (_, s) => by.get(s) ?? item(s, '', 0));
 };
-const player = (pos, dim, level, items, ender = []) => C('', [
+const player = (pos, dim, level, items, ender = [], uid = -4294967295) => C('', [
   L('Pos', T.Float, pos.map(F)), I('DimensionId', dim), I('PlayerLevel', level), I('PlayerGameMode', 0),
   L('Inventory', T.Compound, inv(items, 36)), L('EnderChestInventory', T.Compound, inv(ender, 27)),
   L('Armor', T.Compound, [item(0, 'minecraft:diamond_helmet', 1), item(0, '', 0), item(0, '', 0), item(0, '', 0)]),
   L('Offhand', T.Compound, [item(0, 'minecraft:shield', 1)]),
-  Lg('UniqueID', -4294967295), I('permissionsLevel', 1),
+  Lg('UniqueID', uid), I('permissionsLevel', 1),
 ]);
 
 // Maps: a map record holds its 128×128 picture as RGBA bytes.
@@ -112,6 +112,21 @@ for (const [dim, size] of [[0, 6], [1, 3], [2, 2]]) {
       ids.push(id);
       put(actorKey(id), serialize(C('', [S('identifier', 'minecraft:chest_minecart'), L('Pos', T.Float, [F(88.5), F(65), F(88.5)]), Lg('UniqueID', 900),
         L('ChestItems', T.Compound, [item(0, 'minecraft:writable_book', 1, [C('tag', [L('pages', T.Compound, [{ t: T.Compound, v: [S('text', 'Draft: quest ideas'), S('photoname', '')] }])])])])])));
+      // Pets: a named wolf (sitting), a named donkey with a chest, an unnamed cat, and a cow with an empty name.
+      const health = (cur, max) => L('Attributes', T.Compound, [{ t: T.Compound, v: [S('Name', 'minecraft:health'), Fl('Current', cur), Fl('Max', max), Fl('Base', max)] }]);
+      const pets = [
+        [901, [S('identifier', 'minecraft:wolf'), S('CustomName', 'Biscuit'), B('IsTamed', 1), Lg('OwnerNew', -8589934001), B('Sitting', 1), health(20, 20)]],
+        [902, [S('identifier', 'minecraft:donkey'), S('CustomName', '§6Ned'), B('IsTamed', 1), Lg('OwnerNew', -8589934002), B('Saddled', 1), B('Chested', 1), health(15, 22),
+          L('ChestItems', T.Compound, [item(0, 'minecraft:diamond', 5)])]],
+        [903, [S('identifier', 'minecraft:cat'), B('IsTamed', 1), Lg('OwnerNew', -8589934001), B('IsBaby', 1)]],
+        [904, [S('identifier', 'minecraft:cow'), S('CustomName', ''), B('IsTamed', 0), Lg('OwnerNew', -1)]],
+      ];
+      for (const [n, fields] of pets) {
+        const pid = new Uint8Array(8);
+        new DataView(pid.buffer).setUint32(4, n, false);
+        ids.push(pid);
+        put(actorKey(pid), serialize(C('', [...fields, L('Pos', T.Float, [F(84.5), F(66), F(90.5)]), Lg('UniqueID', n), Lg('LeasherID', -1)])));
+      }
     }
     if ((x * 7 + z) % 4 === 0) {
       let first = null;
@@ -165,6 +180,9 @@ put(utf8('map_-107'), mapRecord(-107, { locked: false, paint: () => null }));
   put(utf8('map_' + id), mapRecord(id, { paint: (x, y) => (x < 8 && y < 8 ? [0, 0, 0] : c) })); // black corner marks the top left
 });
 
+// An older-style entity record kept in its chunk: a named zombie.
+put(chunkKey(3, 0, 0, 0x32), serializeAll([C('', [S('identifier', 'minecraft:zombie'), S('CustomName', 'Bob'), B('IsTamed', 0), L('Pos', T.Float, [F(50), F(64), F(5)]), Lg('UniqueID', 950)])]));
+
 // An old (pre-1.18) chunk: Data2D holds a heightmap and one biome byte per column.
 {
   const d2 = new Uint8Array(512 + 256);
@@ -188,8 +206,10 @@ const people = [
   ], [item(0, 'minecraft:elytra', 1)]],
   ['66666666-7777-4888-8999-000000000000', [-20, 40, 10], 1, 5, [item(0, 'minecraft:torch', 20), mapItem(1, -100)], [book(2, 'Koholint Lore', 'SprowtlingFan', 1, LORE), book(3, 'Quest: The Egg', 'SprowtlingFan', 0, ['Climb to the egg.'])]],
 ];
-for (const [uuid, pos, dim, lvl, items, ender] of people) {
-  put(utf8('player_server_' + uuid), serialize(player(pos, dim, lvl, items, ender)));
+people[0].push(-8589934001);
+people[1].push(-8589934002);
+for (const [uuid, pos, dim, lvl, items, ender, uid] of people) {
+  put(utf8('player_server_' + uuid), serialize(player(pos, dim, lvl, items, ender, uid)));
   put(utf8('player_' + uuid.slice(0, 8)), serialize(C('', [S('MsaId', '2535' + uuid.slice(0, 8)), S('SelfSignedId', uuid), S('ServerId', 'player_server_' + uuid)])));
 }
 put(utf8('scoreboard'), serialize(C('', [L('Objectives', T.End, []), Lg('LastUniqueID', 0)])));

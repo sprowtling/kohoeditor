@@ -224,6 +224,7 @@ const methods = {
     return { books, maps: Object.fromEntries(maps) };
   },
   murals: () => world.murals(),
+  mobs: () => world.mobs(),
   deleteRecords: ({ keys, label }) => world.deleteRecords(keys, label),
   chunkDetail: ({ dim, x, z }) => world.chunkDetail(dim, x, z),
   deleteChunks: ({ dim, coords }, progress) => world.deleteChunks(dim, coords, (f) => progress(f)),

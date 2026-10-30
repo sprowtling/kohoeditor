@@ -15,7 +15,7 @@ import { summarizePlayer } from './items.js';
 import { extractSurface } from './biomes.js';
 import { extractScanInfo, HOLDS_BOOKS, HOLDS_MAPS } from './scaninfo.js';
 import { renderChunk, blockAt } from './blockmap.js';
-import { collectItems } from './collect.js';
+import { collectItems, collectMobs } from './collect.js';
 import { Reader, Writer, toHex, fromHex, utf8, fromUtf8, printableKey } from './bytes.js';
 import { deflateSync, inflateSync } from '../../vendor/fflate.js';
 import { crc32 } from './crc.js';
@@ -300,6 +300,15 @@ export class World {
       this.itemsCacheEdits = this.editVersion;
     }
     return this.itemsCache;
+  }
+
+  // Every named or tamed mob, with its owner and where it is. Cached until something changes.
+  mobs() {
+    if (!this.mobsCache || this.mobsCacheEdits !== this.editVersion) {
+      this.mobsCache = collectMobs(this);
+      this.mobsCacheEdits = this.editVersion;
+    }
+    return this.mobsCache;
   }
 
   // The map records (map_<id>): details and a small thumbnail for each.

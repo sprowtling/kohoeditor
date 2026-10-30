@@ -82,3 +82,36 @@ test('junk maps can be deleted together, and undone together', () => {
   w.undoOperation(op.id);
   assert.equal(w.mapList().length, 8);
 });
+
+test('named mobs and pets are found, with their owners and where they are', () => {
+  const w = open();
+  const mobs = w.mobs();
+  const by = (name) => mobs.find((m) => m.name === name);
+  assert.deepEqual(mobs.filter((m) => m.name).map((m) => m.name).sort(), ['Biscuit', 'Bob', 'Ned']);
+  const players = w.players();
+  const owner = (m) => players.find((p) => p.key === m.owner)?.id;
+  const biscuit = by('Biscuit');
+  assert.equal(biscuit.kind, 'Wolf');
+  assert.equal(biscuit.tamed, true);
+  assert.equal(biscuit.sitting, true);
+  assert.equal(owner(biscuit), '11111111-2222-4333-8444-555555555555');
+  assert.deepEqual(biscuit.pos, [84, 66, 90]);
+  assert.equal(biscuit.dim, 0);
+  assert.deepEqual(biscuit.health, { current: 20, max: 20 });
+  const ned = by('Ned');
+  assert.equal(ned.kind, 'Donkey');
+  assert.equal(owner(ned), '66666666-7777-4888-8999-000000000000');
+  assert.equal(ned.saddled, true);
+  assert.equal(ned.chest[0].name, 'Diamond');
+  // An unnamed but tamed cat is listed; a cow with an empty name tag isn't.
+  const cat = mobs.find((m) => m.kind === 'Cat');
+  assert.equal(cat.name, null);
+  assert.equal(cat.baby, true);
+  assert.equal(mobs.some((m) => m.kind === 'Cow'), false);
+  // An entity stored the older way, inside its chunk.
+  const bob = by('Bob');
+  assert.equal(bob.tamed, false);
+  assert.equal(bob.owner, null);
+  assert.deepEqual(bob.pos, [50, 64, 5]);
+  assert.equal(mobs.length, 4);
+});

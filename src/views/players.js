@@ -2,6 +2,7 @@
 
 import { h, clear, toast, confirmBox, coords, fmt, DIM_NAMES, names, nickname, parseCsv } from '../ui.js';
 import { ENCHANTMENTS } from '../lib/items.js';
+import { petTitle, petWhere } from './pets.js';
 
 const GAME_MODES = ['Survival', 'Creative', 'Adventure', '', '', 'Default', 'Spectator'];
 
@@ -241,6 +242,7 @@ export class PlayersView {
           fact('Permissions', ['Visitor', 'Member', 'Operator', 'Custom'][s.permissions] ?? '—'),
           fact('Items carried', `${fmt(items.reduce((n, i) => n + i.count, 0))} (${enchanted} enchanted)`),
           p.link?.msaId ? fact('Microsoft account id', h('span', { class: 'mono small-text' }, p.link.msaId)) : null)),
+      this.petsCard(p),
       this.inventorySection('Inventory', s.inventory, 'Inventory', true),
       h('div', { class: 'inv-section card' },
         h('div', { class: 'inv-wrap' },
@@ -248,6 +250,24 @@ export class PlayersView {
           h('div', {}, h('h3', {}, 'Offhand'), this.grid([{ slot: 0, item: s.offhand[0], label: 'Offhand' }], 'col', 'Offhand')))),
       this.inventorySection('Ender chest', s.enderChest, 'EnderChestInventory', false),
       this.itemPanel(p));
+  }
+
+  // The player's pets, once they've been looked for (it reads every named or tamed mob).
+  petsCard(p) {
+    const mobs = this.app.mobs;
+    if (!mobs) {
+      return h('div', { class: 'card row' },
+        h('span', { class: 'muted', style: { flex: 1 } }, 'Pets: tamed animals that belong to this player.'),
+        h('button', { class: 'small', onclick: async () => { this.app.mobs = await this.app.call('mobs'); this.renderPlayer(); } }, 'Find their pets'));
+    }
+    const mine = mobs.filter((m) => m.owner === p.key);
+    return h('div', { class: 'card' },
+      h('h3', {}, mine.length ? `Pets (${mine.length})` : 'Pets'),
+      mine.length ? mine.map((m) => h('div', { class: 'change' },
+        h('span', { class: 'what' }, h('b', {}, petTitle(m)), ` · ${m.kind} · ${petWhere(m)}`),
+        h('button', { class: 'small', onclick: () => this.app.show('pets', { pet: m }) }, 'Details'),
+        m.dim != null && m.pos?.length === 3 ? h('button', { class: 'small', onclick: () => this.app.showChunk(m.dim, Math.floor(m.pos[0] / 16), Math.floor(m.pos[2] / 16)) }, 'Map') : null))
+        : h('p', { class: 'muted small-text', style: { margin: 0 } }, 'No tamed animals in this world belong to this player.'));
   }
 
   fillItemIds() {

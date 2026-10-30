@@ -11,6 +11,8 @@ import { parseChunkKey, isActorKey } from './keys.js';
 import { prettyName, stripFormatting } from './items.js';
 import { fromHex, utf8 } from './bytes.js';
 import { crc32 } from './crc.js';
+import { HOLDS_BOOKS, HOLDS_MAPS, HOLDS_NAMED, HOLDS_TAMED } from './scaninfo.js';
+import { readItems } from './items.js';
 
 const BOOKS = new Set(['minecraft:written_book', 'minecraft:writable_book']);
 const MAP_ITEMS = new Set(['minecraft:filled_map']);
@@ -89,7 +91,8 @@ export function collectItems(world) {
   }
 
   // Block entities and entities the scan found books or maps in
-  for (const [hex] of world.itemRecords ?? []) {
+  for (const [hex, flags] of world.itemRecords ?? []) {
+    if (!(flags & (HOLDS_BOOKS | HOLDS_MAPS))) continue;
     const key = fromHex(hex);
     const v = world.get(key);
     if (!v) continue;
@@ -121,4 +124,67 @@ export function collectItems(world) {
     }
   }
   return { books, maps, frames };
+}
+
+// ---------------------------------------------------------------------------
+// Named mobs and pets
+
+const healthOf = (root) => {
+  const attrs = child(root, 'Attributes');
+  const hp = attrs?.v?.find((a) => val(a, 'Name') === 'minecraft:health');
+  return hp ? { current: val(hp, 'Current'), max: val(hp, 'Max') } : null;
+};
+
+// Every named or tamed mob: { name, identifier, tamed, owner (player key or
+// null), ownerId, dim, pos, health, baby, sitting, saddled, chest, recordKey, index }.
+export function collectMobs(world) {
+  // Pets remember their owner by the owner's UniqueID in this world.
+  const owners = new Map();
+  for (const p of world.playerKeys ?? []) {
+    const v = world.get(fromHex(p.key));
+    if (!v) continue;
+    try {
+      const uid = val(parseAll(v).roots[0], 'UniqueID');
+      if (uid !== undefined) owners.set(String(uid), p.key);
+    } catch { /* skip unreadable players */ }
+  }
+  const mobs = [];
+  for (const [hex, flags] of world.itemRecords ?? []) {
+    if (!(flags & (HOLDS_NAMED | HOLDS_TAMED))) continue;
+    const key = fromHex(hex);
+    const v = world.get(key);
+    if (!v) continue;
+    let roots;
+    try { roots = parseAll(v).roots; } catch { continue; }
+    const c = parseChunkKey(key);
+    const dim = c ? c.dim : world.actorDimension(hex);
+    roots.forEach((root, index) => {
+      const name = stripFormatting(val(root, 'CustomName') ?? '');
+      const tamed = !!val(root, 'IsTamed');
+      if (!name && !tamed) return;
+      const identifier = val(root, 'identifier') ?? (val(root, 'id') !== undefined ? `id ${val(root, 'id')}` : 'unknown');
+      const ownerId = val(root, 'OwnerNew');
+      const ownerKey = ownerId !== undefined && ownerId !== -1n ? owners.get(String(ownerId)) ?? null : null;
+      const chestItems = child(root, 'ChestItems');
+      mobs.push({
+        name: name || null,
+        identifier,
+        kind: prettyName(identifier),
+        tamed,
+        owner: ownerKey,
+        ownerId: ownerId !== undefined && ownerId !== -1n ? String(ownerId) : null,
+        dim,
+        pos: (child(root, 'Pos')?.v ?? []).map((x) => Math.floor(x.v)),
+        health: healthOf(root),
+        baby: !!val(root, 'IsBaby'),
+        sitting: !!val(root, 'Sitting'),
+        saddled: !!val(root, 'Saddled'),
+        chest: chestItems ? readItems(chestItems) : null,
+        leashed: val(root, 'LeasherID') !== undefined && val(root, 'LeasherID') !== -1n,
+        recordKey: hex,
+        index,
+      });
+    });
+  }
+  return mobs.sort((a, b) => (a.name ?? '~').localeCompare(b.name ?? '~') || a.kind.localeCompare(b.kind));
 }

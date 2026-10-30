@@ -7,6 +7,7 @@ import { RecordsView } from './views/records.js';
 import { WorldView } from './views/world.js';
 import { ArtView } from './views/art.js';
 import { LibraryView } from './views/library.js';
+import { PetsView } from './views/pets.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -49,6 +50,7 @@ const BUSY_LABELS = {
   mapList: 'Reading the maps',
   items: 'Finding every book and map',
   murals: 'Putting murals together',
+  mobs: 'Finding named mobs and pets',
   deleteRecords: 'Saving',
   players: 'Reading players',
   setItem: 'Saving', editRecord: 'Saving', editLevelDat: 'Saving', deleteRecord: 'Saving', revertRecord: 'Undoing',
@@ -203,7 +205,7 @@ function showApp() {
   $('pending-button').hidden = false;
   $('world-title').textContent = app.info.levelName ?? '';
   document.title = `${app.info.levelName ?? 'World'} · Koho Editor`;
-  for (const [name, View] of Object.entries({ players: PlayersView, map: MapView, art: ArtView, library: LibraryView, records: RecordsView, world: WorldView })) {
+  for (const [name, View] of Object.entries({ players: PlayersView, map: MapView, art: ArtView, library: LibraryView, pets: PetsView, records: RecordsView, world: WorldView })) {
     app.views[name] = new View($('view-' + name), app);
   }
   app.refreshPending();
