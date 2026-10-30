@@ -281,16 +281,37 @@ export class World {
   // Which dimension a separately stored entity is in (its record doesn't say;
   // the chunk entity lists do). Worked out once, when first needed.
   actorDimension(hex) {
-    if (!this.actorDims) {
-      this.actorDims = new Map();
+    return this.actorHome(hex)?.dim ?? null;
+  }
+
+  // The chunk whose entity list holds a separately stored entity: { dim, x, z }.
+  actorHome(hex) {
+    if (!this.actorHomes || this.actorHomesEdits !== this.editVersion) {
+      this.actorHomes = new Map();
+      this.actorHomesEdits = this.editVersion;
       this.chunks.forEach((m, dim) => {
         for (const c of m.values()) {
-          if (!c.hasDigpKey || !c.digp) continue;
-          for (const k of this.entityKeys(dim, c.x, c.z)) this.actorDims.set(toHex(k), dim);
+          if (!c.hasDigpKey) continue;
+          for (const k of this.entityKeys(dim, c.x, c.z)) this.actorHomes.set(toHex(k), { dim, x: c.x, z: c.z });
         }
       });
     }
-    return this.actorDims.get(hex) ?? null;
+    return this.actorHomes.get(hex) ?? null;
+  }
+
+  // Records holding books, maps, or named or tamed mobs: what the scan found,
+  // plus any added or changed since (a pasted chest, a pet set down...), minus deleted ones.
+  itemRecordsNow() {
+    if (this.itemRecordsCache && this.itemRecordsEdits === this.editVersion) return this.itemRecordsCache;
+    const out = new Map(this.itemRecords ?? []);
+    for (const [h, e] of this.edits) {
+      if (!e.value) { out.delete(h); continue; }
+      const flags = extractScanInfo(e.key, e.value);
+      if (flags && flags.length === 1) out.set(h, flags[0]); else out.delete(h);
+    }
+    this.itemRecordsCache = [...out];
+    this.itemRecordsEdits = this.editVersion;
+    return this.itemRecordsCache;
   }
 
   // Every book and map item in the world, with where it is. Cached until something changes.
@@ -841,7 +862,7 @@ export class World {
       } else if (op.type === 'paste') {
         pasted[op.dim] += op.count;
         operations.push({ id: op.id, type: op.type, dim: op.dim, count: op.count, at: op.at, label: `Paste ${op.count} chunk${op.count === 1 ? '' : 's'} at chunk ${op.at[0]}, ${op.at[1]} in the ${DIMENSIONS[op.dim]}${op.from && op.from !== this.levelName ? ` (from ${op.from})` : ''}` });
-      } else if (op.type === 'leveldat') {
+      } else if (op.type === 'leveldat' || op.type === 'pets') {
         operations.push({ id: op.id, type: op.type, label: op.label });
       } else if (op.current.size) {
         const e = [...op.current.values()][0];
@@ -1027,7 +1048,7 @@ function transformRecord(tag, value, bx, bz, uidMap) {
 // Entity ids: the game hands out ids whose top half counts game sessions
 // (starting near zero). Pasted entities get ids from a range the game will
 // not reach, so they can never collide with real ones.
-class EntityIds {
+export class EntityIds {
   constructor(world) {
     this.world = world;
     this.hi = 2000000000 + Math.floor(Math.random() * 140000000);

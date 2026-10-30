@@ -55,6 +55,14 @@ changes, and save it again.
   and all), where it is right now with a button to the map, and details like
   health, saddle and what a donkey is carrying. Each player's page lists
   their pets too, and the whole list downloads as a spreadsheet.
+
+  The **pet carrier** picks pets up and sets them down somewhere else:
+  next to their owner, or at coordinates. In the same world they move (a
+  lost pet can be brought home). To take pets to another world, save the
+  carrier as a `.kohopets` file and open it there. Pets keep their name,
+  looks, health and whatever they carry, and still belong to their owners,
+  who are found again by Microsoft account once they've joined the new
+  world (or choose the owner yourself).
 - **Records**: every other entry in the world's database (villages, maps,
   scoreboard, portals and more), shown as a readable NBT tree. Click a value
   to change it.
@@ -202,7 +210,8 @@ src/lib/items.js      readable item names, enchantments, containers
 src/lib/biomes.js     biome names and colours, surface biome sampling
 src/lib/blockmap.js   the block view: reading subchunks, colours, top blocks
 src/lib/scaninfo.js   what the scan notes per record (biomes; which hold books or maps)
-src/lib/collect.js    finding every book and map item, and where it is
+src/lib/collect.js    finding every book, map, named mob and pet, and where it is
+src/lib/carrier.js    the pet carrier: picking pets up, carrier files, setting them down
 src/views/art.js, src/views/library.js, src/views/pets.js   the Art, Library and Pets tabs
 src/mapworker.js      helper workers that draw the block view in parallel
 vendor/fflate.js      zlib decompression (MIT licence)

@@ -265,6 +265,8 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
   position: absolute; right: 12px; top: 60px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
   padding: 4px 10px; font-size: 12.5px; box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
+.carrier-button { justify-self: start; }
+.carrier-row select { max-width: 200px; }
 .goto-wrap { display: inline-flex; gap: 4px; }
 .goto { width: 130px; }
 .button.toggle { gap: 6px; }

@@ -4,6 +4,7 @@
 import { World } from './lib/world.js';
 import { ZipFiles, dataOffset } from './lib/zip.js';
 import { writeWorld } from './lib/export.js';
+import { pickUp, setDown, encodeCarrier, decodeCarrier, findOwner, ownersOf } from './lib/carrier.js';
 import { RESULT_BYTES } from './lib/blockmap.js';
 import { chunkKey } from './lib/keys.js';
 import { compareBytes } from './lib/bytes.js';
@@ -55,6 +56,16 @@ function zipSource(file) {
 let source = null;
 let world = null;
 let input = null;
+let carrier = []; // pets picked up (see lib/carrier.js) while this world is open; a carrier file takes them to another
+
+// What the page needs to show the carrier: each pet, and who it would belong to here.
+function carrierInfo() {
+  const owners = ownersOf(world);
+  return {
+    pets: carrier.map((p) => ({ name: p.name, kind: p.kind, owner: p.owner, from: { dim: p.from?.dim, pos: p.from?.pos }, here: findOwner(world, p, owners) })),
+    owners: owners.map((o) => ({ key: o.key, id: o.id })),
+  };
+}
 
 // Helpers for the block map, kept running while a world is open.
 let mapPool = null;
@@ -225,6 +236,27 @@ const methods = {
   },
   murals: () => world.murals(),
   mobs: () => world.mobs(),
+  carrierInfo: () => carrierInfo(),
+  carrierAdd: ({ picks }) => {
+    const have = new Set(carrier.map((p) => `${p.from?.world}|${p.from?.recordKey}|${p.from?.index}`));
+    for (const p of pickUp(world, picks)) if (!have.has(`${p.from.world}|${p.from.recordKey}|${p.from.index}`)) carrier.push(p);
+    return carrierInfo();
+  },
+  carrierRemove: ({ index }) => { carrier.splice(index, 1); return carrierInfo(); },
+  carrierClear: () => { carrier = []; return carrierInfo(); },
+  carrierFile: () => new Blob([encodeCarrier(carrier, world.levelName)], { type: 'application/octet-stream' }),
+  carrierLoad: ({ file }) => {
+    const pets = decodeCarrier(new Uint8Array(new FileReaderSync().readAsArrayBuffer(file)));
+    carrier.push(...pets);
+    return carrierInfo();
+  },
+  carrierSetDown: ({ where, owners }) => {
+    const r = setDown(world, carrier, where, owners);
+    // Pets now set down leave the carrier; any that couldn't be placed stay in it.
+    const placed = new Set(r.placed.map((p) => p.index));
+    carrier = carrier.filter((_, i) => !placed.has(i));
+    return { ...r, carrier: carrierInfo() };
+  },
   deleteRecords: ({ keys, label }) => world.deleteRecords(keys, label),
   chunkDetail: ({ dim, x, z }) => world.chunkDetail(dim, x, z),
   deleteChunks: ({ dim, coords }, progress) => world.deleteChunks(dim, coords, (f) => progress(f)),

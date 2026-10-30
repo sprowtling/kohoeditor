@@ -91,7 +91,7 @@ export function collectItems(world) {
   }
 
   // Block entities and entities the scan found books or maps in
-  for (const [hex, flags] of world.itemRecords ?? []) {
+  for (const [hex, flags] of world.itemRecordsNow()) {
     if (!(flags & (HOLDS_BOOKS | HOLDS_MAPS))) continue;
     const key = fromHex(hex);
     const v = world.get(key);
@@ -149,7 +149,7 @@ export function collectMobs(world) {
     } catch { /* skip unreadable players */ }
   }
   const mobs = [];
-  for (const [hex, flags] of world.itemRecords ?? []) {
+  for (const [hex, flags] of world.itemRecordsNow()) {
     if (!(flags & (HOLDS_NAMED | HOLDS_TAMED))) continue;
     const key = fromHex(hex);
     const v = world.get(key);

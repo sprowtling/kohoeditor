@@ -51,6 +51,8 @@ const BUSY_LABELS = {
   items: 'Finding every book and map',
   murals: 'Putting murals together',
   mobs: 'Finding named mobs and pets',
+  carrierSetDown: 'Setting pets down',
+  carrierLoad: 'Opening the pet carrier',
   deleteRecords: 'Saving',
   players: 'Reading players',
   setItem: 'Saving', editRecord: 'Saving', editLevelDat: 'Saving', deleteRecord: 'Saving', revertRecord: 'Undoing',
