@@ -5,6 +5,8 @@ import { PlayersView } from './views/players.js';
 import { MapView } from './views/map.js';
 import { RecordsView } from './views/records.js';
 import { WorldView } from './views/world.js';
+import { ArtView } from './views/art.js';
+import { LibraryView } from './views/library.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -44,6 +46,10 @@ const BUSY_LABELS = {
   loadClipboard: 'Opening the chunk file',
   clipboardFile: 'Saving the chunk file',
   chunkList: 'Updating the map',
+  mapList: 'Reading the maps',
+  items: 'Finding every book and map',
+  murals: 'Putting murals together',
+  deleteRecords: 'Saving',
   players: 'Reading players',
   setItem: 'Saving', editRecord: 'Saving', editLevelDat: 'Saving', deleteRecord: 'Saving', revertRecord: 'Undoing',
 };
@@ -197,7 +203,7 @@ function showApp() {
   $('pending-button').hidden = false;
   $('world-title').textContent = app.info.levelName ?? '';
   document.title = `${app.info.levelName ?? 'World'} · Koho Editor`;
-  for (const [name, View] of Object.entries({ players: PlayersView, map: MapView, records: RecordsView, world: WorldView })) {
+  for (const [name, View] of Object.entries({ players: PlayersView, map: MapView, art: ArtView, library: LibraryView, records: RecordsView, world: WorldView })) {
     app.views[name] = new View($('view-' + name), app);
   }
   app.refreshPending();
@@ -281,6 +287,7 @@ function renderPending() {
     if (o.type === 'delete') return h('button', { class: 'small', onclick: go(() => app.show('map', { dim: o.dim })) }, 'Map');
     if (o.type === 'paste') return h('button', { class: 'small', onclick: go(() => app.showChunk(o.dim, o.at[0], o.at[1])) }, 'Map');
     if (o.type === 'leveldat') return h('button', { class: 'small', onclick: go(() => app.show('world')) }, 'View');
+    if (o.type === 'records') return h('button', { class: 'small', onclick: go(() => app.show('art')) }, 'View');
     return h('button', { class: 'small', onclick: go(() => app.showRecord(o.key)) }, 'View');
   };
   // Player records read better under the names you've given them.

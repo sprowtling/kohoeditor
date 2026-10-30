@@ -266,6 +266,35 @@ function readStorage(v, p) {
   };
 }
 
+// The block at one spot in a palette subchunk: { name, states } with states
+// as a plain object, or null (old-format subchunks have no names to give).
+export function blockAt(v, x, y, z) {
+  if (!v || v.length < 3) return null;
+  const version = v[0];
+  if (version !== 1 && version !== 8 && version !== 9) return null;
+  let p = version === 9 ? 3 : version === 8 ? 2 : 1;
+  if (version !== 1 && v[1] === 0) return null;
+  const dv = new DataView(v.buffer, v.byteOffset, v.byteLength);
+  const bits = v[p++] >> 1;
+  let index = 0;
+  if (bits) {
+    const perWord = Math.floor(32 / bits);
+    const u = (x << 8) | (z << 4) | y;
+    index = (dv.getUint32(p + Math.floor(u / perWord) * 4, true) >>> ((u % perWord) * bits)) & ((1 << bits) - 1);
+    p += Math.ceil(4096 / perWord) * 4;
+    const count = dv.getInt32(p, true);
+    p += 4;
+    if (index >= count) return null;
+  }
+  const r = new Reader(v, p);
+  let tag = null;
+  for (let i = 0; i <= index; i++) tag = readTag(r);
+  if (!tag || tag.t !== T.Compound) return null;
+  const states = {};
+  for (const s of tag.v.find((c) => c.n === 'states')?.v ?? []) states[s.n] = typeof s.v === 'bigint' ? Number(s.v) : s.v;
+  return { name: tag.v.find((c) => c.n === 'name')?.v ?? '', states };
+}
+
 // ---------------------------------------------------------------------------
 // One chunk from above
 

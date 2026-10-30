@@ -37,6 +37,19 @@ changes, and save it again.
   - **copy** them and **paste** them somewhere else, in this world or (by
     saving a `.kohochunks` file) in a different world. Chests, signs and mobs
     come along, moved to their new positions.
+- **Art**: every map in the world as a picture: map art, exploration maps
+  and blank ones. Name, tag (art, keep, discard) and add notes to each; see
+  where every copy is (item frames, chests, shulker boxes, inventories);
+  spot duplicates; download one map or a whole set as PNGs (original size or
+  enlarged, pixel-crisp); and clear out maps you don't want. **Murals** puts
+  walls of maps hung side by side in item frames back together as one
+  picture, the way it looks standing in front of it, ready to download.
+- **Library**: every written book and book & quill in the world, gathered
+  from inventories, ender chests, chests, shulker boxes, lecterns, frames,
+  minecart chests and pack animals (Bedrock keeps no list of books; each one
+  lives inside its item). Copies are grouped, the original is marked, and
+  each copy says where it is. Read them with their colours and styles, add
+  notes, and download any book, or the whole library, as text.
 - **Records**: every other entry in the world's database (villages, maps,
   scoreboard, portals and more), shown as a readable NBT tree. Click a value
   to change it.
@@ -183,6 +196,9 @@ src/lib/export.js     writes the edited world out piece by piece
 src/lib/items.js      readable item names, enchantments, containers
 src/lib/biomes.js     biome names and colours, surface biome sampling
 src/lib/blockmap.js   the block view: reading subchunks, colours, top blocks
+src/lib/scaninfo.js   what the scan notes per record (biomes; which hold books or maps)
+src/lib/collect.js    finding every book and map item, and where it is
+src/views/art.js, src/views/library.js   the Art and Library tabs
 src/mapworker.js      helper workers that draw the block view in parallel
 vendor/fflate.js      zlib decompression (MIT licence)
 vendor/seedgen.wasm   cubiomes' biome generator, built by tools/seedgen/build.sh (MIT licence)

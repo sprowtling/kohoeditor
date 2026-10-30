@@ -217,6 +217,14 @@ const methods = {
   undoOperation: ({ id }) => world.undoOperation(id),
   setItem: ({ key, list, slot, item }) => world.setItem(key, list, slot, item),
   editLevelDat: ({ ops }) => world.editLevelDat(ops),
+  mapList: () => world.mapList(),
+  mapImages: ({ ids }) => ids.map((id) => world.readMap(id)?.colors ?? null),
+  items: () => {
+    const { books, maps } = world.items();
+    return { books, maps: Object.fromEntries(maps) };
+  },
+  murals: () => world.murals(),
+  deleteRecords: ({ keys, label }) => world.deleteRecords(keys, label),
   chunkDetail: ({ dim, x, z }) => world.chunkDetail(dim, x, z),
   deleteChunks: ({ dim, coords }, progress) => world.deleteChunks(dim, coords, (f) => progress(f)),
   restoreChunks: ({ dim, coords }, progress) => world.restoreChunks(dim, coords, (f) => progress(f)),

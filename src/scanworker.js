@@ -3,7 +3,7 @@
 
 import { Table, summarizeTable } from './lib/leveldb.js';
 import { ZipFiles } from './lib/zip.js';
-import { extractSurface } from './lib/biomes.js';
+import { extractScanInfo } from './lib/scaninfo.js';
 
 const reader = new FileReaderSync();
 const blobFile = (blob) => ({
@@ -33,7 +33,7 @@ self.onmessage = (ev) => {
     const t0 = performance.now();
     const whole = file.read(0, file.size);
     const t1 = performance.now();
-    const summary = summarizeTable(new Table({ size: whole.length, read: (o, l) => whole.subarray(o, o + l) }, msg.number), extractSurface);
+    const summary = summarizeTable(new Table({ size: whole.length, read: (o, l) => whole.subarray(o, o + l) }, msg.number), extractScanInfo);
     self.postMessage({ number: msg.number, summary, readMs: t1 - t0, workMs: performance.now() - t1 }, [summary.buffer]);
   } catch (e) {
     self.postMessage({ number: msg.number, error: e.message || String(e) });

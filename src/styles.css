@@ -277,6 +277,34 @@ input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px s
 .chunk-keys { font-size: 12.5px; }
 .chunk-keys td { padding: 2px 6px 2px 0; vertical-align: top; }
 
+/* Art */
+.art-content { display: flex; flex-direction: column; gap: 12px; }
+.art-bar { position: sticky; top: -16px; z-index: 2; background: var(--bg); padding: 8px 0; }
+.art-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.art-card { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); text-align: left; white-space: normal; align-items: stretch; }
+.art-card:hover { border-color: var(--muted); }
+.art-card.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.art-card.tag-art { border-color: var(--accent); }
+.art-card.tag-discard { opacity: 0.6; }
+.art-card canvas, .art-big canvas, .mural-img { width: 100%; height: auto; aspect-ratio: 1; image-rendering: pixelated; background: repeating-conic-gradient(var(--panel-2) 0 25%, var(--panel) 0 50%) 0 0 / 16px 16px; border-radius: 4px; }
+.mural-img { aspect-ratio: auto; max-height: 420px; width: auto; max-width: 100%; }
+.art-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.art-side .field input, .art-side textarea { width: 100%; }
+.art-big { margin-bottom: 10px; }
+.mural-list { display: grid; gap: 14px; }
+.mural { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
+.mural-info { flex: 1; min-width: 220px; display: grid; gap: 4px; }
+.mural-info input { width: 100%; font-weight: 600; }
+
+/* Library */
+.book { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; }
+.book-page { background: #f6efdc; color: #2b2214; border-radius: 6px; padding: 18px 20px; font-family: Georgia, 'Times New Roman', serif; font-size: 15px; line-height: 1.55; min-height: 220px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08); }
+.page-text { white-space: pre-wrap; word-break: break-word; }
+.book-nav { margin-top: 10px; }
+.all-pages { display: grid; gap: 10px; margin-top: 12px; }
+.content textarea { width: 100%; margin-top: 8px; resize: vertical; }
+
 /* NBT tree */
 .nbt { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
 .nbt ul { list-style: none; margin: 0; padding-left: 18px; border-left: 1px dotted var(--line); }

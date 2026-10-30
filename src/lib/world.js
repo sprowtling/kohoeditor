@@ -13,9 +13,12 @@ import {
 } from './keys.js';
 import { summarizePlayer } from './items.js';
 import { extractSurface } from './biomes.js';
-import { renderChunk } from './blockmap.js';
+import { extractScanInfo, HOLDS_BOOKS, HOLDS_MAPS } from './scaninfo.js';
+import { renderChunk, blockAt } from './blockmap.js';
+import { collectItems } from './collect.js';
 import { Reader, Writer, toHex, fromHex, utf8, fromUtf8, printableKey } from './bytes.js';
 import { deflateSync, inflateSync } from '../../vendor/fflate.js';
+import { crc32 } from './crc.js';
 
 // files: { paths: string[], open(path) -> { size, read(offset, length) } | null }
 // Paths use "/" and are relative to the archive or folder that was opened.
@@ -103,11 +106,12 @@ export class World {
   }
 
   // Reads every key once to learn what is in the world.
-  // summaries: optional Map of table number -> summarizeTable(table, extractSurface) output, made in parallel elsewhere.
+  // summaries: optional Map of table number -> summarizeTable(table, extractScanInfo) output, made in parallel elsewhere.
   scan(onProgress, summaries = null) {
     const chunks = [new Map(), new Map(), new Map()];
     const players = [];
     const other = [];
+    const itemRecords = []; // [hex key, HOLDS_* flags] for records holding books or maps
     let actors = 0, keys = 0, bytes = 0;
     const total = Math.max(this.db.totalTableBytes, 1);
     const start = this.readBytes;
@@ -133,8 +137,9 @@ export class World {
         ch.parts.push(packPart(c.tag, c.sub));
         if (c.tag === TAG_BLOCK_ENTITIES) ch.blockEntities = true;
         if (c.tag === TAG_LEGACY_ENTITIES && vlen) ch.digp = true;
+        if (extra && extra.length === 1) itemRecords.push([toHex(k), extra[0]]);
         // Data3D sorts before Data2D, so a chunk with both keeps the newer one.
-        if (extra && !ch.surface) ch.surface = extra.slice();
+        else if (extra && !ch.surface) ch.surface = extra.slice();
         return;
       }
       const d = parseDigpKey(k);
@@ -144,15 +149,20 @@ export class World {
         if (vlen) ch.digp = true;
         return;
       }
-      if (isActorKey(k)) { actors++; return; }
+      if (isActorKey(k)) {
+        actors++;
+        if (extra && extra.length === 1) itemRecords.push([toHex(k), extra[0]]);
+        return;
+      }
       const desc = describeKey(k);
       if (desc.kind === 'player') players.push({ key: toHex(k), text: desc.text, size: vlen });
       other.push({ key: toHex(k), label: desc.label, kind: desc.kind, size: vlen });
-    }, summaries, extractSurface);
+    }, summaries, extractScanInfo);
     this.chunks = chunks;
     this.playerKeys = players;
     this.otherKeys = other;
-    this.stats = { keys, bytes, actors, chunks: chunks.map((m) => m.size) };
+    this.itemRecords = itemRecords;
+    this.stats = { keys, bytes, actors, chunks: chunks.map((m) => m.size), itemRecords: itemRecords.length };
     this.scanned = true;
     return this.stats;
   }
@@ -214,6 +224,7 @@ export class World {
 
   // Sets one database key as part of an operation, remembering what was there first.
   setEdit(op, key, value, why) {
+    this.editVersion = (this.editVersion ?? 0) + 1;
     const h = toHex(key);
     if (!op.saved.has(h)) op.saved.set(h, this.edits.get(h));
     const e = { key, value, why, op: op.id };
@@ -225,6 +236,7 @@ export class World {
   // Puts back what an operation replaced, for all of its keys or just some.
   // A key is left alone if something later has changed it again.
   undoKeys(op, hexes = [...op.saved.keys()]) {
+    this.editVersion = (this.editVersion ?? 0) + 1;
     for (const h of hexes) {
       if (!op.saved.has(h)) continue;
       if (this.edits.get(h) === op.current.get(h)) {
@@ -261,6 +273,138 @@ export class World {
     }
     this.ops.delete(id);
     return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Books and maps (see collect.js)
+
+  // Which dimension a separately stored entity is in (its record doesn't say;
+  // the chunk entity lists do). Worked out once, when first needed.
+  actorDimension(hex) {
+    if (!this.actorDims) {
+      this.actorDims = new Map();
+      this.chunks.forEach((m, dim) => {
+        for (const c of m.values()) {
+          if (!c.hasDigpKey || !c.digp) continue;
+          for (const k of this.entityKeys(dim, c.x, c.z)) this.actorDims.set(toHex(k), dim);
+        }
+      });
+    }
+    return this.actorDims.get(hex) ?? null;
+  }
+
+  // Every book and map item in the world, with where it is. Cached until something changes.
+  items() {
+    if (!this.itemsCache || this.itemsCacheEdits !== this.editVersion) {
+      this.itemsCache = collectItems(this);
+      this.itemsCacheEdits = this.editVersion;
+    }
+    return this.itemsCache;
+  }
+
+  // The map records (map_<id>): details and a small thumbnail for each.
+  mapList() {
+    const out = [];
+    for (const o of this.otherKeys) {
+      if (o.kind !== 'text' || !/^map_-?\d+$/.test(o.label)) continue;
+      const m = this.readMap(o.label.slice(4));
+      if (m) { delete m.colors; out.push(m); }
+    }
+    return out;
+  }
+
+  // One map: its details and its 128×128 RGBA picture (colors), or null.
+  readMap(id) {
+    const key = utf8('map_' + id);
+    const v = this.get(key);
+    if (!v) return null;
+    let root;
+    try { root = parseAll(v).roots[0]; } catch { return null; }
+    const colorsTag = child(root, 'colors');
+    const w = val(root, 'width') ?? 128, h = val(root, 'height') ?? 128;
+    let colors = null;
+    if (colorsTag && colorsTag.v.length === w * h * 4) colors = new Uint8Array(colorsTag.v.buffer, colorsTag.v.byteOffset, colorsTag.v.length).slice();
+    // A 32×32 thumbnail, and how much of the map is drawn on.
+    const thumb = new Uint8Array(32 * 32 * 4);
+    let drawn = 0;
+    if (colors) {
+      for (let i = 3; i < colors.length; i += 4) if (colors[i]) drawn++;
+      const sx = w / 32, sy = h / 32;
+      for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
+        const o = ((Math.floor(y * sy) * w) + Math.floor(x * sx)) * 4;
+        thumb.set(colors.subarray(o, o + 4), (y * 32 + x) * 4);
+      }
+    }
+    return {
+      id: String(id), key: toHex(key), width: w, height: h, colors, thumb,
+      scale: val(root, 'scale') ?? 0,
+      locked: !!val(root, 'mapLocked'),
+      dim: val(root, 'dimension') ?? 0,
+      center: [val(root, 'xCenter') ?? 0, val(root, 'zCenter') ?? 0],
+      parent: val(root, 'parentMapId') !== undefined ? String(val(root, 'parentMapId')) : null,
+      drawn: colors ? drawn / (w * h) : 0,
+      hash: colors ? crc32(colors).toString(16) : null,
+      edited: this.edits.has(toHex(key)),
+    };
+  }
+
+  // Walls of maps in item frames, put back together. Each mural: { dim,
+  // facing, width, height, tiles: [{ u, v, mapId, rotation }], pos } where u
+  // runs left to right and v top to bottom as seen standing in front of it.
+  murals() {
+    const { frames } = this.items();
+    const groups = new Map();
+    for (const f of frames) {
+      if (f.dim == null || f.pos.some((n) => n == null)) continue;
+      const facing = this.frameFacing(f);
+      const [x, y, z] = f.pos;
+      // u: left to right, v: top to bottom, w: the wall's own position
+      const uvw = { 2: [-x, -y, z], 3: [x, -y, z], 4: [z, -y, x], 5: [-z, -y, x], 1: [x, z, y], 0: [x, -z, y] }[facing] ?? [x, -y, z];
+      const gk = `${f.dim}:${facing}:${uvw[2]}`;
+      if (!groups.has(gk)) groups.set(gk, []);
+      groups.get(gk).push({ ...f, facing, u: uvw[0], v: uvw[1] });
+    }
+    const murals = [];
+    for (const list of groups.values()) {
+      // Frames that touch (side by side or above/below) make one mural.
+      const at = new Map(list.map((f) => [f.u + ',' + f.v, f]));
+      const seen = new Set();
+      for (const start of list) {
+        const k0 = start.u + ',' + start.v;
+        if (seen.has(k0)) continue;
+        const part = [];
+        const stack = [start];
+        seen.add(k0);
+        while (stack.length) {
+          const f = stack.pop();
+          part.push(f);
+          for (const [du, dv] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const k = (f.u + du) + ',' + (f.v + dv);
+            if (at.has(k) && !seen.has(k)) { seen.add(k); stack.push(at.get(k)); }
+          }
+        }
+        if (part.length < 2) continue;
+        const u0 = Math.min(...part.map((f) => f.u)), v0 = Math.min(...part.map((f) => f.v));
+        const u1 = Math.max(...part.map((f) => f.u)), v1 = Math.max(...part.map((f) => f.v));
+        const xs = part.map((f) => f.pos[0]), ys = part.map((f) => f.pos[1]), zs = part.map((f) => f.pos[2]);
+        murals.push({
+          dim: part[0].dim, facing: part[0].facing, width: u1 - u0 + 1, height: v1 - v0 + 1,
+          pos: [Math.min(...xs), Math.min(...ys), Math.min(...zs)],
+          tiles: part.map((f) => ({ u: f.u - u0, v: f.v - v0, mapId: f.mapId, rotation: rotationSteps(f.rotation) })),
+        });
+      }
+    }
+    return murals.sort((a, b) => b.tiles.length - a.tiles.length);
+  }
+
+  // Which way an item frame faces, from its block's facing_direction state:
+  // 0 down, 1 up, 2 north, 3 south, 4 west, 5 east.
+  frameFacing(f) {
+    const [x, y, z] = f.pos;
+    const v = this.get(chunkKey(Math.floor(x / 16), Math.floor(z / 16), f.dim, TAG_SUBCHUNK, Math.floor(y / 16)));
+    const b = v && blockAt(v, ((x % 16) + 16) % 16, ((y % 16) + 16) % 16, ((z % 16) + 16) % 16);
+    const d = b?.states?.facing_direction;
+    return typeof d === 'number' ? d : 3;
   }
 
   // -------------------------------------------------------------------------
@@ -622,6 +766,13 @@ export class World {
 
   deleteRecord(keyHex) {
     this.recordChange(keyHex, null, 'deleted');
+  }
+
+  // Deletes several records as one change (one entry in the list, one undo).
+  deleteRecords(keyHexes, label) {
+    const op = this.newOp('records', label);
+    for (const h of keyHexes) this.setEdit(op, fromHex(h), null, 'deleted');
+    return op.id;
   }
 
   // Undoes whatever last changed this one key.
@@ -1060,6 +1211,11 @@ export function decodeClipboard(file) {
     throw new Error('That chunk file was made by a newer version of Koho Editor.');
   }
   return makeClipboard({ world: header.world, dim: header.dim, chunks, meta, created: header.created });
+}
+
+// Item frame rotation (Bedrock stores degrees) to clockwise quarter turns.
+function rotationSteps(deg) {
+  return ((Math.round(Number(deg) / 90) % 4) + 4) % 4;
 }
 
 export { DIMENSIONS, TAG_SUBCHUNK, utf8 };
