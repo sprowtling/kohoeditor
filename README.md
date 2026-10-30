@@ -32,7 +32,8 @@ changes, and save it again.
   [cubiomes](https://github.com/Cubitect/cubiomes); it matches Bedrock's own
   biomes closely, though edges such as riverbanks can be a few blocks off.
   **Open this spot in Chunkbase** shows the same place there. Select
-  chunks by dragging or by typing block coordinates, then:
+  chunks by dragging or by typing block coordinates (hold Ctrl, or ⌘ on a
+  Mac, to add more areas to the selection, or Alt to take some out), then:
   - **regenerate** them from the seed, or
   - **copy** them and **paste** them somewhere else, in this world or (by
     saving a `.kohochunks` file) in a different world. Chests, signs and mobs
