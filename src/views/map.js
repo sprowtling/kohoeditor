@@ -32,6 +32,21 @@ function rampColor(t) {
 const PASTED_RGB = [90, 150, 230];
 const BLOCK_BATCH = 1024; // chunks drawn per request in the block view
 
+// The selection: areas (rectangles of chunks, inclusive) added or taken out,
+// in order; where they overlap, the latest one wins.
+const area = (x0, z0, x1, z1, remove = false) => ({ x0: Math.min(x0, x1), z0: Math.min(z0, z1), x1: Math.max(x0, x1), z1: Math.max(z0, z1), remove });
+const newSelection = (a) => ({ parts: [a] });
+function inSelection(sel, x, z) {
+  let on = false;
+  for (const p of sel.parts) if (x >= p.x0 && x <= p.x1 && z >= p.z0 && z <= p.z1) on = !p.remove;
+  return on;
+}
+function selectionBounds(sel) {
+  const add = sel.parts.filter((p) => !p.remove);
+  if (!add.length) return null;
+  return { x0: Math.min(...add.map((p) => p.x0)), z0: Math.min(...add.map((p) => p.z0)), x1: Math.max(...add.map((p) => p.x1)), z1: Math.max(...add.map((p) => p.z1)) };
+}
+
 // Round numbers of blocks between labelled grid lines, smallest first.
 const GRID_STEPS = [16, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000];
 const PLAIN_RGB = [200, 205, 190];
@@ -44,7 +59,7 @@ export class MapView {
     this.dim = 0;
     this.mode = 'size';
     this.tool = 'pan';
-    this.sel = null; // { x0, z0, x1, z1 } in chunks, inclusive
+    this.sel = null; // { parts: [area] } (see newSelection), or null
     this.view = { cx: 0, cz: 0, scale: 4 };
     this.hover = null;
     this.clip = null; // what has been copied
@@ -99,7 +114,7 @@ export class MapView {
     await this.loaded;
     if (opts.dim !== undefined && opts.dim !== this.dim) await this.setDim(opts.dim, opts.x === undefined);
     if (opts.x !== undefined) {
-      this.sel = { x0: opts.x, z0: opts.z, x1: opts.x, z1: opts.z };
+      this.sel = newSelection(area(opts.x, opts.z, opts.x, opts.z));
       this.view.scale = Math.max(this.view.scale, 12);
       this.centerOn(opts.x + 0.5, opts.z + 0.5);
       this.renderSide();
@@ -478,15 +493,22 @@ export class MapView {
       ctx.strokeStyle = cssVar('--text');
       ctx.strokeRect(hx + 0.5, hy + 0.5, scale, scale);
     }
-    const sel = this.dragSel ?? this.sel;
-    if (sel && !this.pasting) {
-      const [sx, sy] = this.toScreen(sel.x0, sel.z0);
-      const [ex, ey] = this.toScreen(sel.x1 + 1, sel.z1 + 1);
-      ctx.fillStyle = 'rgba(42,125,225,0.15)';
-      ctx.fillRect(sx, sy, ex - sx, ey - sy);
-      ctx.strokeStyle = '#2a7de1';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(sx, sy, Math.max(ex - sx, 2), Math.max(ey - sy, 2));
+    // The selection, with the area being dragged out (added, taken out, or starting afresh).
+    const parts = this.dragSel
+      ? (this.dragSel.mode === 'new' || !this.sel ? [] : this.sel.parts).concat([this.dragSel.area])
+      : this.sel?.parts ?? [];
+    if (parts.length && !this.pasting) {
+      for (const p of parts) {
+        const [sx, sy] = this.toScreen(p.x0, p.z0);
+        const [ex, ey] = this.toScreen(p.x1 + 1, p.z1 + 1);
+        ctx.fillStyle = p.remove ? 'rgba(179,58,43,0.22)' : 'rgba(42,125,225,0.15)';
+        ctx.fillRect(sx, sy, ex - sx, ey - sy);
+        ctx.strokeStyle = p.remove ? '#b33a2b' : '#2a7de1';
+        ctx.lineWidth = 2;
+        ctx.setLineDash(p.remove ? [6, 4] : []);
+        ctx.strokeRect(sx, sy, Math.max(ex - sx, 2), Math.max(ey - sy, 2));
+      }
+      ctx.setLineDash([]);
       ctx.lineWidth = 1;
     }
     // Where a paste would land
@@ -629,8 +651,10 @@ export class MapView {
     cv.addEventListener('pointerdown', (e) => {
       cv.setPointerCapture(e.pointerId);
       const [sx, sy] = pos(e);
-      const selecting = !this.pasting && (this.tool === 'select' || e.shiftKey);
-      drag = { sx, sy, cx: this.view.cx, cz: this.view.cz, selecting, moved: false };
+      // Ctrl (⌘ on a Mac) adds to the selection; Alt takes out of it.
+      const mode = e.ctrlKey || e.metaKey ? 'add' : e.altKey ? 'remove' : 'new';
+      const selecting = !this.pasting && (this.tool === 'select' || e.shiftKey || mode !== 'new');
+      drag = { sx, sy, cx: this.view.cx, cz: this.view.cz, selecting, moved: false, mode };
       if (!selecting && !this.pasting) cv.style.cursor = 'grabbing';
     });
     cv.addEventListener('pointermove', (e) => {
@@ -652,7 +676,7 @@ export class MapView {
       if (Math.abs(sx - drag.sx) + Math.abs(sy - drag.sy) > 3) drag.moved = true;
       if (drag.selecting) {
         const [ax, az] = this.toChunk(drag.sx, drag.sy);
-        this.dragSel = { x0: Math.floor(Math.min(ax, fx)), z0: Math.floor(Math.min(az, fz)), x1: Math.floor(Math.max(ax, fx)), z1: Math.floor(Math.max(az, fz)) };
+        this.dragSel = { mode: drag.mode, area: area(Math.floor(ax), Math.floor(az), Math.floor(fx), Math.floor(fz), drag.mode === 'remove') };
         this.draw();
       } else {
         this.view.cx = drag.cx - (sx - drag.sx) / this.view.scale;
@@ -670,11 +694,11 @@ export class MapView {
         if (player) this.app.showPlayer(player.key);
         else if (this.pasting) this.pasteAt(x, z);
         else {
-          this.sel = { x0: x, z0: z, x1: x, z1: z };
+          this.addToSelection(area(x, z, x, z, drag.mode === 'remove'), drag.mode);
           this.renderSide();
         }
       } else if (drag.selecting && this.dragSel) {
-        this.sel = this.dragSel;
+        this.addToSelection(this.dragSel.area, drag.mode);
         this.renderSide();
       }
       this.dragSel = null;
@@ -763,7 +787,7 @@ export class MapView {
     this.stopPasting();
     try {
       const r = await this.app.call('pasteChunks', { dim: this.dim, x, z, entities });
-      this.sel = { x0: x, z0: z, x1: x + b.x1 - b.x0, z1: z + b.z1 - b.z0 };
+      this.sel = newSelection(area(x, z, x + b.x1 - b.x0, z + b.z1 - b.z0));
       await this.app.refreshPending();
       toast(`Pasted ${fmt(r.count)} chunk${r.count === 1 ? '' : 's'}. Save the world to keep them.`);
     } catch (e) {
@@ -825,20 +849,31 @@ export class MapView {
   // -------------------------------------------------------------------------
   // Side panel
 
+  // mode: 'new' starts a fresh selection; 'add' and 'remove' change the one there is.
+  addToSelection(a, mode) {
+    if (mode === 'new' || !this.sel) {
+      this.sel = a.remove ? null : newSelection(a);
+      return;
+    }
+    this.sel = { parts: [...this.sel.parts, a] };
+    if (!selectionBounds(this.sel)) this.sel = null;
+  }
+
+  // Indexes (into this.chunks) of the generated chunks that are selected.
   selectedChunks() {
     const s = this.sel;
-    if (!s) return [];
+    const b = s && selectionBounds(s);
+    if (!b) return [];
     const out = [];
-    const area = (s.x1 - s.x0 + 1) * (s.z1 - s.z0 + 1);
-    if (area < this.chunks.length / 4) {
-      for (let x = s.x0; x <= s.x1; x++) for (let z = s.z0; z <= s.z1; z++) {
+    const cells = (b.x1 - b.x0 + 1) * (b.z1 - b.z0 + 1);
+    if (cells < this.chunks.length / 4) {
+      for (let x = b.x0; x <= b.x1; x++) for (let z = b.z0; z <= b.z1; z++) {
         const i = this.index.get(x + ',' + z);
-        if (i !== undefined) out.push(i);
+        if (i !== undefined && inSelection(s, x, z)) out.push(i);
       }
     } else {
       for (let i = 0; i < this.chunks.length; i += 4) {
-        const x = this.chunks[i], z = this.chunks[i + 1];
-        if (x >= s.x0 && x <= s.x1 && z >= s.z0 && z <= s.z1) out.push(i);
+        if (inSelection(s, this.chunks[i], this.chunks[i + 1])) out.push(i);
       }
     }
     return out;
@@ -886,7 +921,7 @@ export class MapView {
         h('button', { class: 'small', title: 'Opens Chunkbase\'s seed map in a new tab, centred where you are looking', onclick: () => this.openChunkbase() }, 'Open this spot in Chunkbase')),
       h('p', { class: 'muted small-text', style: { marginBottom: 0 } }, 'Opening Chunkbase copies the seed too, in case you need to paste it there.')) : null;
     const help = h('div', { class: 'card muted small-text' },
-      h('p', { style: { marginTop: 0 } }, 'Drag to move, scroll to zoom. To select, use the Select tool or hold Shift while dragging. Click one chunk to look inside it, or a player\'s dot to open their inventory.'),
+      h('p', { style: { marginTop: 0 } }, 'Drag to move, scroll to zoom. To select, use the Select tool or hold Shift while dragging. Hold Ctrl (⌘ on a Mac) while dragging or clicking to add more to the selection, or Alt to take some out. Click one chunk to look inside it, or a player\'s dot to open their inventory.'),
       h('p', { style: { marginBottom: 0 } }, 'Regenerated chunks come back fresh from the world seed the next time a player comes near. Builds, chests, signs and mobs in them are removed.'));
 
     if (!s || this.pasting) { clear(this.side, head, clipCard, form, seedCard, help); return; }
@@ -894,15 +929,19 @@ export class MapView {
     const picked = this.selectedChunks();
     const del = picked.filter((i) => this.chunks[i + 3] & FLAG_DELETED).length;
     const live = picked.length - del;
-    const w = s.x1 - s.x0 + 1, d = s.z1 - s.z0 + 1;
+    const b = selectionBounds(s);
+    const w = b.x1 - b.x0 + 1, d = b.z1 - b.z0 + 1;
+    const simple = s.parts.length === 1;
+    const singleChunk = simple && w * d === 1;
     const coordsOf = (list) => list.map((i) => [this.chunks[i], this.chunks[i + 1]]);
     const selCard = h('div', { class: 'card' },
-      h('h3', {}, w * d === 1 ? `Chunk ${s.x0}, ${s.z0}` : `Selection: ${fmt(w)} × ${fmt(d)} chunks`),
+      h('h3', {}, singleChunk ? `Chunk ${b.x0}, ${b.z0}` : simple ? `Selection: ${fmt(w)} × ${fmt(d)} chunks` : `Selection: ${s.parts.length} areas`),
       h('table', { class: 'kv small-text' },
-        h('tr', {}, h('td', {}, 'Blocks X'), h('td', { class: 'mono' }, `${s.x0 * 16} to ${s.x1 * 16 + 15}`)),
-        h('tr', {}, h('td', {}, 'Blocks Z'), h('td', { class: 'mono' }, `${s.z0 * 16} to ${s.z1 * 16 + 15}`)),
-        h('tr', {}, h('td', {}, 'Generated'), h('td', {}, `${fmt(picked.length)} of ${fmt(w * d)}`)),
+        h('tr', {}, h('td', {}, simple ? 'Blocks X' : 'Within X'), h('td', { class: 'mono' }, `${b.x0 * 16} to ${b.x1 * 16 + 15}`)),
+        h('tr', {}, h('td', {}, simple ? 'Blocks Z' : 'Within Z'), h('td', { class: 'mono' }, `${b.z0 * 16} to ${b.z1 * 16 + 15}`)),
+        h('tr', {}, h('td', {}, 'Generated'), h('td', {}, simple ? `${fmt(picked.length)} of ${fmt(w * d)}` : `${fmt(picked.length)} chunks selected`)),
         del ? h('tr', {}, h('td', {}, 'To regenerate'), h('td', {}, fmt(del))) : null),
+      singleChunk ? null : h('p', { class: 'muted small-text', style: { margin: '6px 0 0' } }, 'Ctrl-drag (⌘ on a Mac) to add more, Alt-drag to take some out.'),
       h('div', { class: 'row', style: { marginTop: '10px' } },
         h('button', { disabled: !live, onclick: () => this.copySelection(picked), title: 'Copy these chunks so you can paste them somewhere else' }, 'Copy'),
         h('button', {
@@ -934,8 +973,8 @@ export class MapView {
 
     clear(this.side, head, selCard, clipCard, form, seedCard, help);
 
-    if (w * d === 1 && picked.length === 1) {
-      const detail = await this.app.call('chunkDetail', { dim: this.dim, x: s.x0, z: s.z0 });
+    if (singleChunk && picked.length === 1) {
+      const detail = await this.app.call('chunkDetail', { dim: this.dim, x: b.x0, z: b.z0 });
       if (this.sel !== s) return;
       const subs = detail.keys.filter((k) => k.sub !== null).length;
       const card = h('div', { class: 'card' },
@@ -956,16 +995,19 @@ export class MapView {
   }
 
   coordForm() {
-    const s = this.sel;
+    // Filled in from the latest area of the selection.
+    const s = this.sel?.parts.at(-1);
     const num = (v) => h('input', { type: 'number', value: v ?? '', step: 1 });
     const ix0 = num(s ? s.x0 * 16 : ''), ix1 = num(s ? s.x1 * 16 + 15 : ''), iz0 = num(s ? s.z0 * 16 : ''), iz1 = num(s ? s.z1 * 16 + 15 : '');
-    const apply = () => {
+    const apply = (mode) => {
       const vals = [ix0, ix1, iz0, iz1].map((i) => i.value.trim());
       if (vals.some((v) => v === '' || Number.isNaN(Number(v)))) { toast('Please fill in all four block coordinates.', true); return; }
       const [a, b, c, d] = vals.map(Number);
-      this.sel = { x0: Math.floor(Math.min(a, b) / 16), x1: Math.floor(Math.max(a, b) / 16), z0: Math.floor(Math.min(c, d) / 16), z1: Math.floor(Math.max(c, d) / 16) };
-      const cx = (this.sel.x0 + this.sel.x1 + 1) / 2, cz = (this.sel.z0 + this.sel.z1 + 1) / 2;
-      const span = Math.max(this.sel.x1 - this.sel.x0 + 1, this.sel.z1 - this.sel.z0 + 1);
+      const typed = area(Math.floor(a / 16), Math.floor(c / 16), Math.floor(b / 16), Math.floor(d / 16), mode === 'remove');
+      this.addToSelection(typed, mode);
+      const bounds = this.sel ? selectionBounds(this.sel) : typed;
+      const cx = (bounds.x0 + bounds.x1 + 1) / 2, cz = (bounds.z0 + bounds.z1 + 1) / 2;
+      const span = Math.max(bounds.x1 - bounds.x0 + 1, bounds.z1 - bounds.z0 + 1);
       this.view.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, 0.6 * Math.min(this.w, this.hgt) / span));
       this.centerOn(cx, cz);
       this.renderSide();
@@ -987,7 +1029,10 @@ export class MapView {
         h('span', {}, 'X'), ix0, ix1,
         h('span', {}, 'Z'), iz0, iz1),
       h('p', { class: 'muted small-text' }, 'Whole chunks are selected, so the edges snap outward to the nearest chunk border.'),
-      h('button', { onclick: apply }, 'Select area'),
+      h('div', { class: 'row' },
+        h('button', { onclick: () => apply('new') }, 'Select area'),
+        this.sel ? h('button', { onclick: () => apply('add'), title: 'Add this area to what is already selected' }, 'Add area') : null,
+        this.sel ? h('button', { class: 'ghost', onclick: () => apply('remove'), title: 'Take this area out of the selection' }, 'Take out') : null),
       this.clip ? [
         h('h3', { style: { marginTop: '14px' } }, 'Paste at block coordinates'),
         h('div', { class: 'row' }, pasteX, pasteZ, h('button', { onclick: pasteTyped }, 'Paste')),
